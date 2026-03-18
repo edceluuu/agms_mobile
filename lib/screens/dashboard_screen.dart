@@ -4,25 +4,48 @@ import '../models/user_model.dart';
 import '../services/auth_service.dart';
 import '../utils/constants.dart';
 import '../widgets/offline_banner.dart';
+import 'map/map_screen.dart';
+import 'scanner/qr_scanner_screen.dart';
 
-class DashboardScreen extends StatelessWidget {
+class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final user = AuthService.getCurrentUser();
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
 
+class _DashboardScreenState extends State<DashboardScreen> {
+  int _currentIndex = 0;
+  List<Widget> _screens = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _screens = const [_DashboardBody(), QRScannerScreen(), MapScreen()];
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
-        title: const Text(
-          'AGMS Dashboard',
-          style: TextStyle(color: Colors.white),
+        title: Row(
+          children: const [
+            Icon(Icons.eco, color: AppColors.primary, size: 22),
+            SizedBox(width: 8),
+            Text(
+              'AGMS',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout, color: Colors.white),
+            icon: const Icon(Icons.logout, color: Colors.white54),
             onPressed: () async {
               await AuthService.logout();
               context.go('/login');
@@ -33,25 +56,65 @@ class DashboardScreen extends StatelessWidget {
       body: Column(
         children: [
           const OfflineBanner(),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _greetingCard(user),
-                  const SizedBox(height: 20),
-                  _roleBasedContent(user),
-                ],
-              ),
-            ),
+          Expanded(child: _screens[_currentIndex]),
+        ],
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentIndex,
+        onTap: (i) => setState(() => _currentIndex = i),
+        backgroundColor: AppColors.surface,
+        selectedItemColor: AppColors.primary,
+        unselectedItemColor: Colors.white38,
+        type: BottomNavigationBarType.fixed,
+        selectedLabelStyle: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+        unselectedLabelStyle: const TextStyle(fontSize: 11),
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.dashboard_outlined),
+            activeIcon: Icon(Icons.dashboard),
+            label: 'Dashboard',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.qr_code_scanner_outlined),
+            activeIcon: Icon(Icons.qr_code_scanner),
+            label: 'Scan',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.map_outlined),
+            activeIcon: Icon(Icons.map),
+            label: 'Map',
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _greetingCard(UserModel? user) {
+// ── Dashboard Body ────────────────────────────────────────────────────────────
+
+class _DashboardBody extends StatelessWidget {
+  const _DashboardBody();
+
+  @override
+  Widget build(BuildContext context) {
+    final user = AuthService.getCurrentUser();
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _greetingCard(user, context),
+          const SizedBox(height: 20),
+          _roleBasedContent(user),
+        ],
+      ),
+    );
+  }
+
+  Widget _greetingCard(UserModel? user, BuildContext context) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -73,6 +136,25 @@ class DashboardScreen extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           _roleBadge(user?.role ?? ''),
+          if (user?.role == 'ADMIN') ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => context.go('/register-user'),
+                icon: const Icon(Icons.person_add, size: 18),
+                label: const Text('Register New User'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -137,13 +219,13 @@ class DashboardScreen extends StatelessWidget {
 
     final cards = items[role] ?? items['FIELD_MONITOR']!;
 
-    return Expanded(
-      child: GridView.count(
-        crossAxisCount: 2,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        children: cards,
-      ),
+    return GridView.count(
+      crossAxisCount: 2,
+      crossAxisSpacing: 12,
+      mainAxisSpacing: 12,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      children: cards,
     );
   }
 
