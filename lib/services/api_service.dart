@@ -1,6 +1,6 @@
 import 'package:dio/dio.dart';
+import 'package:agms_mobile/utils/constants.dart';
 import '../storage/hive_storage.dart';
-import '../utils/constants.dart';
 
 class ApiService {
   static final Dio _dio = Dio(BaseOptions(baseUrl: AppConstants.baseUrl));
@@ -10,7 +10,9 @@ class ApiService {
       InterceptorsWrapper(
         onRequest: (options, handler) {
           final token = HiveStorage.getAccessToken();
-          if (token != null) options.headers['Authorization'] = 'Bearer $token';
+          if (token != null) {
+            options.headers['Authorization'] = 'Bearer $token';
+          }
           handler.next(options);
         },
         onError: (error, handler) async {

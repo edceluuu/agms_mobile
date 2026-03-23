@@ -14,7 +14,7 @@ class UserModel extends HiveObject {
   String name;
 
   @HiveField(3)
-  String role; // 'ADMIN', 'SUPERVISOR', 'FIELD_MONITOR'
+  String role;
 
   UserModel({
     required this.id,

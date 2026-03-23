@@ -5,6 +5,7 @@ import 'storage/hive_storage.dart';
 import 'screens/splash_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/dashboard_screen.dart';
+import 'screens/map/grid_map_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,9 +17,23 @@ void main() async {
 final _router = GoRouter(
   initialLocation: '/',
   routes: [
-    GoRoute(path: '/', builder: (_, __) => const SplashScreen()),
-    GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
-    GoRoute(path: '/dashboard', builder: (_, __) => const DashboardScreen()),
+    GoRoute(path: '/', builder: (context, state) => const SplashScreen()),
+    GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
+    GoRoute(
+      path: '/dashboard',
+      builder: (context, state) => const DashboardScreen(),
+    ),
+    GoRoute(
+      path: '/grid-map',
+      builder: (context, state) {
+        final extra = state.extra as Map<String, dynamic>;
+        return GridMapScreen(
+          gridName: extra['gridName'] as String,
+          areaName: extra['areaName'] as String,
+          plantCount: extra['plantCount'] as int,
+        );
+      },
+    ),
   ],
 );
 

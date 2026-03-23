@@ -4,32 +4,24 @@ import '../models/user_model.dart';
 import '../services/auth_service.dart';
 import '../utils/constants.dart';
 import '../widgets/offline_banner.dart';
-import 'map/map_screen.dart';
-import 'scanner/qr_scanner_screen.dart';
 
-class DashboardScreen extends StatefulWidget {
+// Static grid data
+const _staticGrids = [
+  {'name': 'Grid A', 'area': 'Area 1', 'plantCount': 32},
+];
+
+class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
   @override
-  State<DashboardScreen> createState() => _DashboardScreenState();
-}
-
-class _DashboardScreenState extends State<DashboardScreen> {
-  int _currentIndex = 0;
-  List<Widget> _screens = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _screens = const [_DashboardBody(), QRScannerScreen(), MapScreen()];
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final user = AuthService.getCurrentUser();
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
+        elevation: 0,
         title: Row(
           children: const [
             Icon(Icons.eco, color: AppColors.primary, size: 22),
@@ -37,7 +29,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Text(
               'AGMS',
               style: TextStyle(
-                color: Colors.white,
+                color: AppColors.textPrimary,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -45,7 +37,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout, color: Colors.white54),
+            icon: const Icon(Icons.logout, color: AppColors.textSecondary),
             onPressed: () async {
               await AuthService.logout();
               context.go('/login');
@@ -56,65 +48,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
       body: Column(
         children: [
           const OfflineBanner(),
-          Expanded(child: _screens[_currentIndex]),
-        ],
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        onTap: (i) => setState(() => _currentIndex = i),
-        backgroundColor: AppColors.surface,
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: Colors.white38,
-        type: BottomNavigationBarType.fixed,
-        selectedLabelStyle: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-        ),
-        unselectedLabelStyle: const TextStyle(fontSize: 11),
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.dashboard_outlined),
-            activeIcon: Icon(Icons.dashboard),
-            label: 'Dashboard',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.qr_code_scanner_outlined),
-            activeIcon: Icon(Icons.qr_code_scanner),
-            label: 'Scan',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.map_outlined),
-            activeIcon: Icon(Icons.map),
-            label: 'Map',
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _greetingCard(user),
+                  const SizedBox(height: 20),
+                  _roleBasedContent(user),
+                  const SizedBox(height: 24),
+                  _gridListSection(context),
+                ],
+              ),
+            ),
           ),
         ],
       ),
     );
   }
-}
 
-// ── Dashboard Body ────────────────────────────────────────────────────────────
-
-class _DashboardBody extends StatelessWidget {
-  const _DashboardBody();
-
-  @override
-  Widget build(BuildContext context) {
-    final user = AuthService.getCurrentUser();
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _greetingCard(user, context),
-          const SizedBox(height: 20),
-          _roleBasedContent(user),
-        ],
-      ),
-    );
-  }
-
-  Widget _greetingCard(UserModel? user, BuildContext context) {
+  Widget _greetingCard(UserModel? user) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -129,32 +83,13 @@ class _DashboardBody extends StatelessWidget {
           Text(
             'Welcome, ${user?.name ?? 'User'}',
             style: const TextStyle(
-              color: Colors.white,
+              color: AppColors.textPrimary,
               fontSize: 20,
               fontWeight: FontWeight.bold,
             ),
           ),
           const SizedBox(height: 4),
           _roleBadge(user?.role ?? ''),
-          if (user?.role == 'ADMIN') ...[
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => context.go('/register-user'),
-                icon: const Icon(Icons.person_add, size: 18),
-                label: const Text('Register New User'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -164,7 +99,7 @@ class _DashboardBody extends StatelessWidget {
     final colors = {
       'ADMIN': AppColors.pinBlue,
       'SUPERVISOR': AppColors.pinYellow,
-      'FIELD_MONITOR': AppColors.pinGreen,
+      'FIELD_USER': AppColors.pinGreen,
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -178,6 +113,7 @@ class _DashboardBody extends StatelessWidget {
         style: TextStyle(
           color: colors[role] ?? AppColors.pinGray,
           fontSize: 12,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
@@ -209,7 +145,7 @@ class _DashboardBody extends StatelessWidget {
         _statCard('Pending Scans', '32', Icons.pending, AppColors.pinYellow),
         _statCard('Flagged', '2', Icons.flag, AppColors.pinRed),
       ],
-      'FIELD_MONITOR': [
+      'FIELD_USER': [
         _statCard('My Plants Today', '24', Icons.eco, AppColors.pinGreen),
         _statCard('Scanned', '18', Icons.check, AppColors.primary),
         _statCard('Pending', '6', Icons.schedule, AppColors.pinYellow),
@@ -217,7 +153,7 @@ class _DashboardBody extends StatelessWidget {
       ],
     };
 
-    final cards = items[role] ?? items['FIELD_MONITOR']!;
+    final cards = items[role] ?? items['FIELD_USER']!;
 
     return GridView.count(
       crossAxisCount: 2,
@@ -226,6 +162,161 @@ class _DashboardBody extends StatelessWidget {
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       children: cards,
+    );
+  }
+
+  Widget _gridListSection(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Section header
+        Row(
+          children: [
+            const Icon(Icons.grid_on, color: AppColors.pinBlue, size: 18),
+            const SizedBox(width: 8),
+            const Text(
+              'My Grids',
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.pinBlue.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '${_staticGrids.length} grids',
+                style: const TextStyle(
+                  color: AppColors.pinBlue,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        // Grid items
+        Column(
+          children: _staticGrids
+              .map((grid) => _gridItem(grid, context))
+              .toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _gridItem(Map<String, dynamic> grid, BuildContext context) {
+    return GestureDetector(
+      onTap: () => context.push(
+        '/grid-map',
+        extra: {
+          'gridName': grid['name'] as String,
+          'areaName': grid['area'] as String,
+          'plantCount': grid['plantCount'] as int,
+        },
+      ),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.pinBlue.withOpacity(0.2)),
+        ),
+        child: Row(
+          children: [
+            // Grid icon
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppColors.pinBlue.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.grid_on,
+                color: AppColors.pinBlue,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+
+            // Grid info
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    grid['name'] as String,
+                    style: const TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.location_on,
+                        color: AppColors.textSecondary,
+                        size: 12,
+                      ),
+                      const SizedBox(width: 3),
+                      Text(
+                        grid['area'] as String,
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            // Plant count badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.pinGreen.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.pinGreen.withOpacity(0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.eco, color: AppColors.pinGreen, size: 12),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${grid['plantCount']}',
+                    style: const TextStyle(
+                      color: AppColors.pinGreen,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Arrow indicator
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.chevron_right,
+              color: AppColors.textSecondary,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -254,7 +345,10 @@ class _DashboardBody extends StatelessWidget {
           Text(
             label,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white60, fontSize: 12),
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 12,
+            ),
           ),
         ],
       ),
