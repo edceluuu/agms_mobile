@@ -7,6 +7,7 @@ import 'screens/login_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/map/grid_map_screen.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'screens/scanner/qr_scanner_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,6 +36,11 @@ final _router = GoRouter(
           plantCount: extra['plantCount'] as int,
         );
       },
+    ),
+    // ✅ ADD THIS
+    GoRoute(
+      path: '/scan',
+      builder: (context, state) => const QRScannerScreen(),
     ),
   ],
 );

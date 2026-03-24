@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class AppConstants {
-  static const String baseUrl = 'http://localhost:3000/api';
+  static const String baseUrl = 'http://192.168.43.53:3000/api';
+  //static const String baseUrl = 'http://10.0.2.2:3000/api';
+  //static const String baseUrl = 'http://localhost:3000/api';
   static String get mapboxAccessToken => dotenv.env['MAPBOX_TOKEN'] ?? '';
 }
 
