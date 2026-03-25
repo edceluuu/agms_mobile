@@ -3,7 +3,19 @@ import 'package:agms_mobile/utils/constants.dart';
 import '../storage/hive_storage.dart';
 
 class ApiService {
-  static final Dio _dio = Dio(BaseOptions(baseUrl: AppConstants.baseUrl));
+  static Dio? _dioInstance;
+
+  static Dio get _dio {
+    _dioInstance ??= Dio(
+      BaseOptions(
+        baseUrl: AppConstants.baseUrl,
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 10),
+        sendTimeout: const Duration(seconds: 10),
+      ),
+    );
+    return _dioInstance!;
+  }
 
   static void init() {
     _dio.interceptors.add(

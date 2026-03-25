@@ -1,20 +1,39 @@
+import 'package:flutter/material.dart';
 import '../models/user_model.dart';
 import '../storage/hive_storage.dart';
+import '../utils/constants.dart';
 import 'api_service.dart';
 
 class AuthService {
   static Future<UserModel?> login(String username, String password) async {
-    final res = await ApiService.post(
-      '/auth/login',
-      data: {'username': username, 'password': password},
-    );
-    final user = UserModel.fromJson(res.data['user']);
-    await HiveStorage.saveUser(user);
-    await HiveStorage.saveTokens(
-      res.data['accessToken'],
-      res.data['refreshToken'],
-    );
-    return user;
+    try {
+      debugPrint('🔵 BASE_URL: ${AppConstants.baseUrl}');
+      debugPrint('🔵 Calling: /auth/login');
+      debugPrint('🔵 Username: $username');
+
+      final res = await ApiService.post(
+        '/auth/login',
+        data: {'username': username, 'password': password},
+      );
+
+      debugPrint('🟢 Status: ${res.statusCode}');
+      debugPrint('🟢 Response: ${res.data}');
+
+      final user = UserModel.fromJson(res.data['user']);
+      debugPrint('🟢 User parsed: ${user.username}');
+
+      await HiveStorage.saveUser(user);
+      await HiveStorage.saveTokens(
+        res.data['accessToken'],
+        res.data['refreshToken'],
+      );
+
+      debugPrint('🟢 Login complete');
+      return user;
+    } catch (e) {
+      debugPrint('🔴 Login failed: $e');
+      rethrow;
+    }
   }
 
   static Future<void> logout() async {

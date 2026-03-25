@@ -14,6 +14,7 @@ void main() async {
   await dotenv.load(fileName: ".env");
   await HiveStorage.init();
   ApiService.init();
+  debugPrint('🔵 BASE_URL: ${dotenv.env['BASE_URL']}');
   runApp(const AGMSApp());
 }
 

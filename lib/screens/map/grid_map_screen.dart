@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart'
+    hide LocationSettings;
 import 'package:geolocator/geolocator.dart' hide Position;
 import '../../utils/constants.dart';
 import 'package:go_router/go_router.dart';
@@ -47,10 +47,8 @@ final _gridGeoJson = {
 
 class _GridMapScreenState extends State<GridMapScreen> {
   MapboxMap? _mapboxMap;
-  PointAnnotationManager? _annotationManager;
   bool _locationPermissionGranted = false;
   bool _permissionChecked = false;
-  Position? _userPosition;
 
   static const double _defaultLat = 7.377146991499139;
   static const double _defaultLng = 125.83816973129873;
@@ -66,12 +64,23 @@ class _GridMapScreenState extends State<GridMapScreen> {
   }
 
   Future<void> _requestLocationPermission() async {
-    final status = await Permission.locationWhenInUse.request();
-    final granted = status.isGranted;
-
-    if (granted) {
-      await _fetchUserLocation();
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      setState(() {
+        _locationPermissionGranted = false;
+        _permissionChecked = true;
+      });
+      return;
     }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    final granted =
+        permission == LocationPermission.whileInUse ||
+        permission == LocationPermission.always;
 
     setState(() {
       _locationPermissionGranted = granted;
@@ -79,80 +88,78 @@ class _GridMapScreenState extends State<GridMapScreen> {
     });
   }
 
-  Future<void> _fetchUserLocation() async {
-    try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-      _userPosition = Position(position.longitude, position.latitude);
-    } catch (e) {
-      debugPrint('Could not get location: $e');
-    }
+  void _onMapCreated(MapboxMap mapboxMap) {
+    _mapboxMap = mapboxMap;
+    debugPrint('🗺️ Map created');
   }
 
-  void _onMapCreated(MapboxMap mapboxMap) async {
-    _mapboxMap = mapboxMap;
+  Future<void> _onStyleLoaded(StyleLoadedEventData data) async {
+    debugPrint('🗺️ Style loaded fired!');
+
+    final mapboxMap = _mapboxMap;
+    if (mapboxMap == null) {
+      debugPrint('❌ _mapboxMap is null in _onStyleLoaded');
+      return;
+    }
+
+    await _addGridPolygon(mapboxMap);
+
+    await mapboxMap.flyTo(
+      CameraOptions(
+        center: Point(coordinates: Position(_defaultLng, _defaultLat)),
+        zoom: _defaultZoom,
+      ),
+      MapAnimationOptions(duration: 800),
+    );
   }
 
   Future<void> _addGridPolygon(MapboxMap mapboxMap) async {
     try {
+      try {
+        await mapboxMap.style.removeStyleLayer('grid-outline');
+        await mapboxMap.style.removeStyleLayer('grid-fill');
+        await mapboxMap.style.removeStyleSource('grid-source');
+      } catch (_) {}
+
       await mapboxMap.style.addSource(
         GeoJsonSource(id: 'grid-source', data: jsonEncode(_gridGeoJson)),
       );
-      await mapboxMap.style.addLayer(
+
+      debugPrint('🟩 Source added, now adding layers...');
+
+      await mapboxMap.style.addLayerAt(
         FillLayer(
           id: 'grid-fill',
           sourceId: 'grid-source',
-          fillColor: Colors.green.withOpacity(0.3).value,
-          fillOutlineColor: Colors.green.value,
+          fillColor: Colors.green.value,
+          fillOpacity: 0.3,
         ),
+        LayerPosition(at: 0),
       );
-      debugPrint('✅ Polygon added successfully');
+
+      await mapboxMap.style.addLayerAt(
+        LineLayer(
+          id: 'grid-outline',
+          sourceId: 'grid-source',
+          lineColor: Colors.green.value,
+          lineWidth: 3.0,
+        ),
+        LayerPosition(at: 0),
+      );
+
+      debugPrint('✅ Polygon + outline added successfully');
     } catch (e) {
       debugPrint('❌ Error adding polygon: $e');
-    }
-  }
-
-  Future<void> _addUserMarker(MapboxMap mapboxMap) async {
-    try {
-      _annotationManager = await mapboxMap.annotations
-          .createPointAnnotationManager();
-
-      final options = PointAnnotationOptions(
-        geometry: Point(coordinates: _userPosition!),
-        iconSize: 1.5,
-        iconImage: 'marker-15', // built-in Mapbox marker icon
-        textField: 'You are here',
-        textSize: 12,
-        textOffset: [0.0, 2.0],
-        textColor: Colors.white.value,
-        textHaloColor: Colors.black.value,
-        textHaloWidth: 1.0,
-      );
-
-      await _annotationManager!.create(options);
-
-      // Fly to user's location after pinning
-      await mapboxMap.flyTo(
-        CameraOptions(center: Point(coordinates: _userPosition!), zoom: 16.0),
-        MapAnimationOptions(duration: 1000),
-      );
-    } catch (e) {
-      debugPrint('Error adding marker: $e');
     }
   }
 
   Future<void> _recenter() async {
     if (kIsWeb || _mapboxMap == null) return;
 
-    // Recenter to user position if available, else grid center
-    final target = _userPosition ?? Position(_defaultLng, _defaultLat);
-    final zoom = _userPosition != null ? 16.0 : _defaultZoom;
-
     await _mapboxMap!.flyTo(
       CameraOptions(
-        center: Point(coordinates: target),
-        zoom: zoom,
+        center: Point(coordinates: Position(_defaultLng, _defaultLat)),
+        zoom: _defaultZoom,
       ),
       MapAnimationOptions(duration: 600),
     );
@@ -217,7 +224,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
       ),
       body: Stack(
         children: [
-          // ── Map or fallback ──────────────────────────────────────────
           if (kIsWeb)
             _buildWebFallback()
           else if (!_permissionChecked)
@@ -227,7 +233,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
           else
             _buildMap(),
 
-          // ── Recenter button ──────────────────────────────────────────
           if (_permissionChecked)
             Positioned(
               top: 16,
@@ -240,7 +245,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
               ),
             ),
 
-          // ── Bottom bar ───────────────────────────────────────────────
           Positioned(
             bottom: 0,
             left: 0,
@@ -312,29 +316,13 @@ class _GridMapScreenState extends State<GridMapScreen> {
   Widget _buildMap() {
     return MapWidget(
       key: const ValueKey('grid_map'),
-      styleUri: MapboxStyles.SATELLITE_STREETS,
+      styleUri: 'mapbox://styles/edceluuu/cmn5m39m8001v01s39gfy8brp',
       cameraOptions: CameraOptions(
         center: Point(coordinates: Position(_defaultLng, _defaultLat)),
         zoom: _defaultZoom,
       ),
       onMapCreated: _onMapCreated,
-      onStyleLoadedListener: (_) async {
-        if (_mapboxMap == null) return;
-
-        await _addGridPolygon(_mapboxMap!);
-
-        await _mapboxMap!.flyTo(
-          CameraOptions(
-            center: Point(coordinates: Position(_defaultLng, _defaultLat)),
-            zoom: _defaultZoom,
-          ),
-          MapAnimationOptions(duration: 800),
-        );
-
-        if (_userPosition != null) {
-          await _addUserMarker(_mapboxMap!);
-        }
-      },
+      onStyleLoadedListener: _onStyleLoaded,
     );
   }
 
@@ -384,7 +372,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
                   ),
                 ),
                 TextButton(
-                  onPressed: () => openAppSettings(),
+                  onPressed: () => Geolocator.openAppSettings(),
                   child: const Text(
                     'Settings',
                     style: TextStyle(
