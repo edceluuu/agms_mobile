@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:math';
+import 'dart:ui' as ui;
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart'
@@ -47,8 +50,13 @@ final _gridGeoJson = {
 
 class _GridMapScreenState extends State<GridMapScreen> {
   MapboxMap? _mapboxMap;
+  PointAnnotationManager? _annotationManager;
+  PointAnnotation? _userAnnotation;
   bool _locationPermissionGranted = false;
   bool _permissionChecked = false;
+  Position? _userPosition;
+  double _userHeading = 0.0;
+  StreamSubscription<Object>? _positionStream;
 
   static const double _defaultLat = 7.377146991499139;
   static const double _defaultLng = 125.83816973129873;
@@ -61,6 +69,12 @@ class _GridMapScreenState extends State<GridMapScreen> {
       MapboxOptions.setAccessToken(AppConstants.mapboxAccessToken);
       _requestLocationPermission();
     }
+  }
+
+  @override
+  void dispose() {
+    _positionStream?.cancel();
+    super.dispose();
   }
 
   Future<void> _requestLocationPermission() async {
@@ -82,27 +96,64 @@ class _GridMapScreenState extends State<GridMapScreen> {
         permission == LocationPermission.whileInUse ||
         permission == LocationPermission.always;
 
+    if (granted) {
+      await _fetchUserLocation();
+      _startPositionStream();
+    }
+
     setState(() {
       _locationPermissionGranted = granted;
       _permissionChecked = true;
     });
   }
 
+  Future<void> _fetchUserLocation() async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+      _userPosition = Position(position.longitude, position.latitude);
+      _userHeading = position.heading;
+      debugPrint('📍 Position: ${position.latitude}, ${position.longitude}');
+      debugPrint('🧭 Heading: ${position.heading}°');
+    } catch (e) {
+      debugPrint('Could not get location: $e');
+    }
+  }
+
+  void _startPositionStream() {
+    _positionStream =
+        Geolocator.getPositionStream(
+          locationSettings: AndroidSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 1,
+          ),
+        ).listen((position) async {
+          _userHeading = position.heading;
+          _userPosition = Position(position.longitude, position.latitude);
+          debugPrint('🧭 New heading: ${position.heading}°');
+          if (_annotationManager != null && _userAnnotation != null) {
+            await _updateArrowMarker();
+          }
+        });
+  }
+
   void _onMapCreated(MapboxMap mapboxMap) {
     _mapboxMap = mapboxMap;
     debugPrint('🗺️ Map created');
+    mapboxMap.compass.updateSettings(CompassSettings(enabled: true));
   }
 
   Future<void> _onStyleLoaded(StyleLoadedEventData data) async {
-    debugPrint('🗺️ Style loaded fired!');
+    debugPrint('🗺️ Style loaded!');
 
     final mapboxMap = _mapboxMap;
-    if (mapboxMap == null) {
-      debugPrint('❌ _mapboxMap is null in _onStyleLoaded');
-      return;
-    }
+    if (mapboxMap == null) return;
 
     await _addGridPolygon(mapboxMap);
+    await _addPolygonCenterMarker(mapboxMap);
 
     await mapboxMap.flyTo(
       CameraOptions(
@@ -111,6 +162,8 @@ class _GridMapScreenState extends State<GridMapScreen> {
       ),
       MapAnimationOptions(duration: 800),
     );
+
+    await _addArrowMarker(mapboxMap);
   }
 
   Future<void> _addGridPolygon(MapboxMap mapboxMap) async {
@@ -124,8 +177,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
       await mapboxMap.style.addSource(
         GeoJsonSource(id: 'grid-source', data: jsonEncode(_gridGeoJson)),
       );
-
-      debugPrint('🟩 Source added, now adding layers...');
 
       await mapboxMap.style.addLayerAt(
         FillLayer(
@@ -147,19 +198,146 @@ class _GridMapScreenState extends State<GridMapScreen> {
         LayerPosition(at: 0),
       );
 
-      debugPrint('✅ Polygon + outline added successfully');
+      debugPrint('✅ Polygon + outline added');
     } catch (e) {
       debugPrint('❌ Error adding polygon: $e');
+    }
+  }
+
+  Future<void> _addPolygonCenterMarker(MapboxMap mapboxMap) async {
+    try {
+      final manager = await mapboxMap.annotations
+          .createPointAnnotationManager();
+
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      const size = 60.0;
+
+      final paint = Paint()..color = Colors.green;
+
+      // Circle head
+      canvas.drawCircle(const Offset(size / 2, size / 2 - 8), 18, paint);
+
+      // Triangle tip
+      final path = Path()
+        ..moveTo(size / 2 - 8, size / 2 + 6)
+        ..lineTo(size / 2 + 8, size / 2 + 6)
+        ..lineTo(size / 2, size / 2 + 24)
+        ..close();
+      canvas.drawPath(path, paint);
+
+      // White inner dot
+      canvas.drawCircle(
+        const Offset(size / 2, size / 2 - 8),
+        8,
+        Paint()..color = Colors.white,
+      );
+
+      final picture = recorder.endRecording();
+      final img = await picture.toImage(size.toInt(), size.toInt());
+      final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+      final bitmap = byteData!.buffer.asUint8List();
+
+      await manager.create(
+        PointAnnotationOptions(
+          geometry: Point(coordinates: Position(_defaultLng, _defaultLat)),
+          image: bitmap,
+          iconSize: 1.0,
+        ),
+      );
+
+      debugPrint('✅ Polygon center marker added');
+    } catch (e) {
+      debugPrint('❌ Error adding center marker: $e');
+    }
+  }
+
+  Future<Uint8List> _createArrowBitmap(double heading) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    const size = 80.0;
+    const center = Offset(size / 2, size / 2);
+
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(heading * (pi / 180.0));
+    canvas.translate(-center.dx, -center.dy);
+
+    final arrowPaint = Paint()
+      ..color = const Color(0xFF2196F3)
+      ..style = PaintingStyle.fill;
+
+    final arrowPath = Path()
+      ..moveTo(size / 2, 4)
+      ..lineTo(size / 2 + 18, size / 2 + 20)
+      ..lineTo(size / 2, size / 2 + 8)
+      ..lineTo(size / 2 - 18, size / 2 + 20)
+      ..close();
+
+    canvas.drawPath(arrowPath, arrowPaint);
+
+    canvas.drawPath(
+      arrowPath,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
+    );
+
+    canvas.drawCircle(
+      Offset(size / 2, size / 2 + 4),
+      4,
+      Paint()..color = Colors.white,
+    );
+
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(size.toInt(), size.toInt());
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
+  Future<void> _addArrowMarker(MapboxMap mapboxMap) async {
+    try {
+      _annotationManager = await mapboxMap.annotations
+          .createPointAnnotationManager();
+
+      final bitmap = await _createArrowBitmap(_userHeading);
+      final location = _userPosition ?? Position(_defaultLng, _defaultLat);
+
+      _userAnnotation = await _annotationManager!.create(
+        PointAnnotationOptions(
+          geometry: Point(coordinates: location),
+          image: bitmap,
+          iconSize: 1.0,
+        ),
+      );
+
+      debugPrint('✅ Arrow marker added, heading: $_userHeading°');
+    } catch (e) {
+      debugPrint('❌ Error adding arrow marker: $e');
+    }
+  }
+
+  Future<void> _updateArrowMarker() async {
+    try {
+      final bitmap = await _createArrowBitmap(_userHeading);
+      _userAnnotation!.image = bitmap;
+      await _annotationManager!.update(_userAnnotation!);
+      debugPrint('🔄 Arrow updated, heading: $_userHeading°');
+    } catch (e) {
+      debugPrint('❌ Error updating arrow: $e');
     }
   }
 
   Future<void> _recenter() async {
     if (kIsWeb || _mapboxMap == null) return;
 
+    final target = _userPosition ?? Position(_defaultLng, _defaultLat);
+    final zoom = _userPosition != null ? 16.0 : _defaultZoom;
+
     await _mapboxMap!.flyTo(
       CameraOptions(
-        center: Point(coordinates: Position(_defaultLng, _defaultLat)),
-        zoom: _defaultZoom,
+        center: Point(coordinates: target),
+        zoom: zoom,
       ),
       MapAnimationOptions(duration: 600),
     );
@@ -235,7 +413,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
           if (_permissionChecked)
             Positioned(
-              top: 16,
+              top: 100,
               right: 16,
               child: FloatingActionButton.small(
                 heroTag: 'grid_recenter',
