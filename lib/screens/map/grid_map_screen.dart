@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart'
     hide LocationSettings;
 import 'package:geolocator/geolocator.dart' hide Position;
@@ -57,10 +58,15 @@ class _GridMapScreenState extends State<GridMapScreen> {
   Position? _userPosition;
   double _userHeading = 0.0;
   StreamSubscription<Object>? _positionStream;
+  StreamSubscription<CompassEvent>? _compassStream;
+
+  // When true, camera follows the user automatically.
+  bool _cameraFollowing = true;
 
   static const double _defaultLat = 7.377146991499139;
   static const double _defaultLng = 125.83816973129873;
   static const double _defaultZoom = 14.0;
+  static const double _followZoom = 17.0;
 
   @override
   void initState() {
@@ -68,14 +74,45 @@ class _GridMapScreenState extends State<GridMapScreen> {
     if (!kIsWeb) {
       MapboxOptions.setAccessToken(AppConstants.mapboxAccessToken);
       _requestLocationPermission();
+      // Compass stream starts independently of location permission
+      _startCompassStream();
     }
   }
 
   @override
   void dispose() {
     _positionStream?.cancel();
+    _compassStream?.cancel();
     super.dispose();
   }
+
+  // ---------------------------------------------------------------------------
+  // Compass — drives arrow rotation regardless of movement
+  // ---------------------------------------------------------------------------
+
+  void _startCompassStream() {
+    _compassStream = FlutterCompass.events?.listen(
+      (CompassEvent event) async {
+        final heading = event.heading;
+        if (heading == null) return;
+
+        // 1-degree threshold to avoid excessive redraws
+        if ((heading - _userHeading).abs() < 1.0) return;
+        _userHeading = heading;
+
+        if (_annotationManager != null && _userAnnotation != null) {
+          await _updateArrowMarker();
+        }
+      },
+      onError: (e) {
+        debugPrint('⚠️ Compass not available: $e');
+      },
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Location permission + position stream
+  // ---------------------------------------------------------------------------
 
   Future<void> _requestLocationPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -115,9 +152,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
         ),
       );
       _userPosition = Position(position.longitude, position.latitude);
-      _userHeading = position.heading;
       debugPrint('📍 Position: ${position.latitude}, ${position.longitude}');
-      debugPrint('🧭 Heading: ${position.heading}°');
     } catch (e) {
       debugPrint('Could not get location: $e');
     }
@@ -131,19 +166,30 @@ class _GridMapScreenState extends State<GridMapScreen> {
             distanceFilter: 1,
           ),
         ).listen((position) async {
-          _userHeading = position.heading;
+          // Only update lat/lng — heading comes from compass, not GPS
           _userPosition = Position(position.longitude, position.latitude);
-          debugPrint('🧭 New heading: ${position.heading}°');
+          debugPrint(
+            '📍 Position updated: ${position.latitude}, ${position.longitude}',
+          );
+
           if (_annotationManager != null && _userAnnotation != null) {
             await _updateArrowMarker();
+          }
+
+          // Move camera to follow user if following mode is on
+          if (_cameraFollowing && _mapboxMap != null) {
+            await _moveCameraToUser(animated: true);
           }
         });
   }
 
+  // ---------------------------------------------------------------------------
+  // Map lifecycle
+  // ---------------------------------------------------------------------------
+
   void _onMapCreated(MapboxMap mapboxMap) {
     _mapboxMap = mapboxMap;
     debugPrint('🗺️ Map created');
-    mapboxMap.compass.updateSettings(CompassSettings(enabled: true));
   }
 
   Future<void> _onStyleLoaded(StyleLoadedEventData data) async {
@@ -151,6 +197,13 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
     final mapboxMap = _mapboxMap;
     if (mapboxMap == null) return;
+
+    // Compass to top-left
+    await mapboxMap.compass.updateSettings(
+      (CompassSettings()
+        ..position = OrnamentPosition.TOP_LEFT
+        ..enabled = true),
+    );
 
     await _addGridPolygon(mapboxMap);
     await _addPolygonCenterMarker(mapboxMap);
@@ -164,7 +217,38 @@ class _GridMapScreenState extends State<GridMapScreen> {
     );
 
     await _addArrowMarker(mapboxMap);
+
+    // Fly to user if we already have a position
+    if (_userPosition != null && _cameraFollowing) {
+      await _moveCameraToUser(animated: true);
+    }
   }
+
+  Future<void> _moveCameraToUser({bool animated = true}) async {
+    final mapboxMap = _mapboxMap;
+    if (mapboxMap == null || _userPosition == null) return;
+
+    if (animated) {
+      await mapboxMap.easeTo(
+        CameraOptions(
+          center: Point(coordinates: _userPosition!),
+          zoom: _followZoom,
+        ),
+        MapAnimationOptions(duration: 300),
+      );
+    } else {
+      await mapboxMap.setCamera(
+        CameraOptions(
+          center: Point(coordinates: _userPosition!),
+          zoom: _followZoom,
+        ),
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Polygon
+  // ---------------------------------------------------------------------------
 
   Future<void> _addGridPolygon(MapboxMap mapboxMap) async {
     try {
@@ -204,6 +288,10 @@ class _GridMapScreenState extends State<GridMapScreen> {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Markers
+  // ---------------------------------------------------------------------------
+
   Future<void> _addPolygonCenterMarker(MapboxMap mapboxMap) async {
     try {
       final manager = await mapboxMap.annotations
@@ -215,10 +303,8 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
       final paint = Paint()..color = Colors.green;
 
-      // Circle head
       canvas.drawCircle(const Offset(size / 2, size / 2 - 8), 18, paint);
 
-      // Triangle tip
       final path = Path()
         ..moveTo(size / 2 - 8, size / 2 + 6)
         ..lineTo(size / 2 + 8, size / 2 + 6)
@@ -226,7 +312,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
         ..close();
       canvas.drawPath(path, paint);
 
-      // White inner dot
       canvas.drawCircle(
         const Offset(size / 2, size / 2 - 8),
         8,
@@ -252,6 +337,8 @@ class _GridMapScreenState extends State<GridMapScreen> {
     }
   }
 
+  /// Draws a blue triangle arrow rotated by [heading] degrees (0 = north).
+  /// Heading comes exclusively from the compass, not GPS bearing.
   Future<Uint8List> _createArrowBitmap(double heading) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
@@ -311,7 +398,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
         ),
       );
 
-      debugPrint('✅ Arrow marker added, heading: $_userHeading°');
+      debugPrint('✅ Arrow marker added');
     } catch (e) {
       debugPrint('❌ Error adding arrow marker: $e');
     }
@@ -320,19 +407,28 @@ class _GridMapScreenState extends State<GridMapScreen> {
   Future<void> _updateArrowMarker() async {
     try {
       final bitmap = await _createArrowBitmap(_userHeading);
+      final location = _userPosition ?? Position(_defaultLng, _defaultLat);
+
       _userAnnotation!.image = bitmap;
+      _userAnnotation!.geometry = Point(coordinates: location);
       await _annotationManager!.update(_userAnnotation!);
-      debugPrint('🔄 Arrow updated, heading: $_userHeading°');
+      debugPrint('🔄 Arrow updated — heading: $_userHeading°, pos: $location');
     } catch (e) {
       debugPrint('❌ Error updating arrow: $e');
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Recenter button
+  // ---------------------------------------------------------------------------
+
   Future<void> _recenter() async {
     if (kIsWeb || _mapboxMap == null) return;
 
+    setState(() => _cameraFollowing = true);
+
     final target = _userPosition ?? Position(_defaultLng, _defaultLat);
-    final zoom = _userPosition != null ? 16.0 : _defaultZoom;
+    final zoom = _userPosition != null ? _followZoom : _defaultZoom;
 
     await _mapboxMap!.flyTo(
       CameraOptions(
@@ -342,6 +438,10 @@ class _GridMapScreenState extends State<GridMapScreen> {
       MapAnimationOptions(duration: 600),
     );
   }
+
+  // ---------------------------------------------------------------------------
+  // UI
+  // ---------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -417,9 +517,14 @@ class _GridMapScreenState extends State<GridMapScreen> {
               right: 16,
               child: FloatingActionButton.small(
                 heroTag: 'grid_recenter',
-                backgroundColor: AppColors.surface,
+                backgroundColor: _cameraFollowing
+                    ? AppColors.primary
+                    : AppColors.surface,
                 onPressed: _recenter,
-                child: const Icon(Icons.my_location, color: AppColors.primary),
+                child: Icon(
+                  Icons.my_location,
+                  color: _cameraFollowing ? Colors.white : AppColors.primary,
+                ),
               ),
             ),
 
