@@ -14,6 +14,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _loading = false;
+  bool _obscurePassword = true;
   String? _error;
 
   Future<void> _login() async {
@@ -74,9 +75,20 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 16),
               TextField(
                 controller: _passwordCtrl,
-                obscureText: true,
+                obscureText: _obscurePassword,
                 style: const TextStyle(color: AppColors.textPrimary),
-                decoration: _inputDecoration('Password', Icons.lock),
+                decoration: _inputDecoration('Password', Icons.lock).copyWith(
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_off
+                          : Icons.visibility,
+                      color: AppColors.textSecondary,
+                    ),
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
+                  ),
+                ),
               ),
               if (_error != null) ...[
                 const SizedBox(height: 12),

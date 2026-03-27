@@ -91,9 +91,14 @@ class _GridMapScreenState extends State<GridMapScreen> {
   // ---------------------------------------------------------------------------
 
   void _startCompassStream() {
-    _compassStream = FlutterCompass.events?.listen(
+    if (FlutterCompass.events == null) {
+      debugPrint('⚠️ FlutterCompass.events is null — compass not supported');
+      return;
+    }
+    _compassStream = FlutterCompass.events!.listen(
       (CompassEvent event) async {
         final heading = event.heading;
+        debugPrint('🧭 Raw heading: $heading');
         if (heading == null) return;
 
         // 1-degree threshold to avoid excessive redraws
@@ -115,7 +120,9 @@ class _GridMapScreenState extends State<GridMapScreen> {
   // ---------------------------------------------------------------------------
 
   Future<void> _requestLocationPermission() async {
+    debugPrint('🔵 Checking location service...');
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    debugPrint('🔵 Service enabled: $serviceEnabled');
     if (!serviceEnabled) {
       setState(() {
         _locationPermissionGranted = false;
@@ -124,9 +131,13 @@ class _GridMapScreenState extends State<GridMapScreen> {
       return;
     }
 
+    debugPrint('🔵 Checking permission...');
     LocationPermission permission = await Geolocator.checkPermission();
+    debugPrint('🔵 Permission: $permission');
     if (permission == LocationPermission.denied) {
+      debugPrint('🔵 Requesting permission...');
       permission = await Geolocator.requestPermission();
+      debugPrint('🔵 Permission after request: $permission');
     }
 
     final granted =
@@ -146,15 +157,16 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
   Future<void> _fetchUserLocation() async {
     try {
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      );
-      _userPosition = Position(position.longitude, position.latitude);
-      debugPrint('📍 Position: ${position.latitude}, ${position.longitude}');
+      debugPrint('📍 Fetching last known position...');
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null) {
+        _userPosition = Position(last.longitude, last.latitude);
+        debugPrint('📍 Last known: ${last.latitude}, ${last.longitude}');
+      } else {
+        debugPrint('📍 No last known position — waiting for stream...');
+      }
     } catch (e) {
-      debugPrint('Could not get location: $e');
+      debugPrint('📍 Could not get last known position: $e');
     }
   }
 
@@ -198,10 +210,11 @@ class _GridMapScreenState extends State<GridMapScreen> {
     final mapboxMap = _mapboxMap;
     if (mapboxMap == null) return;
 
-    // Compass to top-left
     await mapboxMap.compass.updateSettings(
       (CompassSettings()
-        ..position = OrnamentPosition.TOP_LEFT
+        ..position = OrnamentPosition.TOP_RIGHT
+        ..marginTop = 85
+        ..marginRight = 4
         ..enabled = true),
     );
 
@@ -513,7 +526,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
           if (_permissionChecked)
             Positioned(
-              top: 100,
+              top: 16,
               right: 16,
               child: FloatingActionButton.small(
                 heroTag: 'grid_recenter',
