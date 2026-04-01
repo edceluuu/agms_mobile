@@ -1,3 +1,4 @@
+//frontend/lib/services/api_service.dart
 import 'package:dio/dio.dart';
 import 'package:agms_mobile/utils/constants.dart';
 import '../storage/hive_storage.dart';
@@ -66,4 +67,7 @@ class ApiService {
       _dio.post(path, data: data);
   static Future<Response> put(String path, {dynamic data}) =>
       _dio.put(path, data: data);
+  static Future<Response> delete(String path) async {
+    return await _dio.delete(path);
+  }
 }

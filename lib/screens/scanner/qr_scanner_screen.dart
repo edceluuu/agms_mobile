@@ -1,3 +1,4 @@
+//frontend/lib/screens/scanner/qr_scanner_screen.dart
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:go_router/go_router.dart';
@@ -11,7 +12,7 @@ class QRScannerScreen extends StatefulWidget {
 }
 
 class _QRScannerScreenState extends State<QRScannerScreen> {
-  MobileScannerController _controller = MobileScannerController();
+  final MobileScannerController _controller = MobileScannerController();
   bool _scanned = false;
   bool _torchOn = false;
 
@@ -25,64 +26,8 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
     setState(() => _scanned = true);
     _controller.stop();
 
-    // Validate code format (e.g. RS01, NN01)
-    final isValid = RegExp(r'^[A-Z]{2}\d{2,}$').hasMatch(code);
-
-    if (!isValid) {
-      _showError('Invalid QR code: $code', onRetry: _retry);
-      return;
-    }
-
-    // Navigate to data entry
-    context.push('/data-entry', extra: {'qrCode': code});
-  }
-
-  void _retry() {
-    setState(() => _scanned = false);
-    _controller.start();
-  }
-
-  void _showError(String message, {required VoidCallback onRetry}) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Row(
-          children: [
-            Icon(Icons.error_outline, color: AppColors.pinRed),
-            SizedBox(width: 8),
-            Text('Scan Failed', style: TextStyle(color: AppColors.textPrimary)),
-          ],
-        ),
-        content: Text(
-          message,
-          style: const TextStyle(color: AppColors.textSecondary),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              onRetry();
-            },
-            child: const Text(
-              'Try Again',
-              style: TextStyle(color: AppColors.primary),
-            ),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              context.pop();
-            },
-            child: const Text(
-              'Cancel',
-              style: TextStyle(color: AppColors.textSecondary),
-            ),
-          ),
-        ],
-      ),
-    );
+    // Return the raw code to whoever pushed this route
+    context.pop(code);
   }
 
   @override
@@ -100,7 +45,7 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
-          onPressed: () => context.pop(),
+          onPressed: () => context.pop(null),
         ),
         title: const Text(
           'Scan QR',

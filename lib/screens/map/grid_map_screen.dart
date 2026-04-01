@@ -1,5 +1,5 @@
+//frontend/lib/screens/map/grid_map_screen.dart
 import 'dart:convert';
-import 'dart:math';
 import 'dart:ui' as ui;
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -9,7 +9,9 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart'
     hide LocationSettings;
 import 'package:geolocator/geolocator.dart' hide Position;
 import '../../utils/constants.dart';
+import '../../utils/geofence_utils.dart';
 import 'package:go_router/go_router.dart';
+import '../../services/api_service.dart';
 
 class GridMapScreen extends StatefulWidget {
   final String gridName;
@@ -60,8 +62,10 @@ class _GridMapScreenState extends State<GridMapScreen> {
   StreamSubscription<Object>? _positionStream;
   StreamSubscription<CompassEvent>? _compassStream;
 
-  // When true, camera follows the user automatically.
   bool _cameraFollowing = true;
+
+  List<Map<String, dynamic>> _plants = [];
+  PointAnnotationManager? _plantAnnotationManager;
 
   static const double _defaultLat = 7.377146991499139;
   static const double _defaultLng = 125.83816973129873;
@@ -74,7 +78,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
     if (!kIsWeb) {
       MapboxOptions.setAccessToken(AppConstants.mapboxAccessToken);
       _requestLocationPermission();
-      // Compass stream starts independently of location permission
       _startCompassStream();
     }
   }
@@ -86,10 +89,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
     super.dispose();
   }
 
-  // ---------------------------------------------------------------------------
-  // Compass — drives arrow rotation regardless of movement
-  // ---------------------------------------------------------------------------
-
   void _startCompassStream() {
     if (FlutterCompass.events == null) {
       debugPrint('⚠️ FlutterCompass.events is null — compass not supported');
@@ -98,15 +97,11 @@ class _GridMapScreenState extends State<GridMapScreen> {
     _compassStream = FlutterCompass.events!.listen(
       (CompassEvent event) async {
         final heading = event.heading;
-        debugPrint('🧭 Raw heading: $heading');
         if (heading == null) return;
-
-        // 1-degree threshold to avoid excessive redraws
         if ((heading - _userHeading).abs() < 1.0) return;
         _userHeading = heading;
-
         if (_annotationManager != null && _userAnnotation != null) {
-          await _updateArrowMarker();
+          await _updateArrowMarker(positionChanged: false);
         }
       },
       onError: (e) {
@@ -115,14 +110,8 @@ class _GridMapScreenState extends State<GridMapScreen> {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Location permission + position stream
-  // ---------------------------------------------------------------------------
-
   Future<void> _requestLocationPermission() async {
-    debugPrint('🔵 Checking location service...');
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    debugPrint('🔵 Service enabled: $serviceEnabled');
     if (!serviceEnabled) {
       setState(() {
         _locationPermissionGranted = false;
@@ -131,13 +120,9 @@ class _GridMapScreenState extends State<GridMapScreen> {
       return;
     }
 
-    debugPrint('🔵 Checking permission...');
     LocationPermission permission = await Geolocator.checkPermission();
-    debugPrint('🔵 Permission: $permission');
     if (permission == LocationPermission.denied) {
-      debugPrint('🔵 Requesting permission...');
       permission = await Geolocator.requestPermission();
-      debugPrint('🔵 Permission after request: $permission');
     }
 
     final granted =
@@ -157,13 +142,9 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
   Future<void> _fetchUserLocation() async {
     try {
-      debugPrint('📍 Fetching last known position...');
       final last = await Geolocator.getLastKnownPosition();
       if (last != null) {
         _userPosition = Position(last.longitude, last.latitude);
-        debugPrint('📍 Last known: ${last.latitude}, ${last.longitude}');
-      } else {
-        debugPrint('📍 No last known position — waiting for stream...');
       }
     } catch (e) {
       debugPrint('📍 Could not get last known position: $e');
@@ -178,35 +159,21 @@ class _GridMapScreenState extends State<GridMapScreen> {
             distanceFilter: 1,
           ),
         ).listen((position) async {
-          // Only update lat/lng — heading comes from compass, not GPS
           _userPosition = Position(position.longitude, position.latitude);
-          debugPrint(
-            '📍 Position updated: ${position.latitude}, ${position.longitude}',
-          );
-
           if (_annotationManager != null && _userAnnotation != null) {
-            await _updateArrowMarker();
+            await _updateArrowMarker(positionChanged: true);
           }
-
-          // Move camera to follow user if following mode is on
           if (_cameraFollowing && _mapboxMap != null) {
             await _moveCameraToUser(animated: true);
           }
         });
   }
 
-  // ---------------------------------------------------------------------------
-  // Map lifecycle
-  // ---------------------------------------------------------------------------
-
   void _onMapCreated(MapboxMap mapboxMap) {
     _mapboxMap = mapboxMap;
-    debugPrint('🗺️ Map created');
   }
 
   Future<void> _onStyleLoaded(StyleLoadedEventData data) async {
-    debugPrint('🗺️ Style loaded!');
-
     final mapboxMap = _mapboxMap;
     if (mapboxMap == null) return;
 
@@ -231,10 +198,309 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
     await _addArrowMarker(mapboxMap);
 
-    // Fly to user if we already have a position
     if (_userPosition != null && _cameraFollowing) {
       await _moveCameraToUser(animated: true);
     }
+
+    await _loadAndPinPlants(mapboxMap);
+  }
+
+  Future<void> _loadAndPinPlants(MapboxMap mapboxMap) async {
+    try {
+      final response = await ApiService.get('/plants/grid/${widget.gridName}');
+      final List data = response.data;
+      _plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
+
+      _plantAnnotationManager ??= await mapboxMap.annotations
+          .createPointAnnotationManager();
+
+      for (final plant in _plants) {
+        await _addPlantPin(plant);
+      }
+    } catch (e) {
+      debugPrint('❌ Error loading plants: $e');
+    }
+  }
+
+  Future<void> _addPlantPin(Map<String, dynamic> plant) async {
+    if (_plantAnnotationManager == null) return;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    const size = 48.0;
+
+    // Red dot = not scanned this week
+    final paint = Paint()..color = Colors.red;
+    canvas.drawCircle(const Offset(size / 2, size / 2), 16, paint);
+    canvas.drawCircle(
+      const Offset(size / 2, size / 2),
+      8,
+      Paint()..color = Colors.white,
+    );
+
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(size.toInt(), size.toInt());
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    final bitmap = byteData!.buffer.asUint8List();
+
+    await _plantAnnotationManager!.create(
+      PointAnnotationOptions(
+        geometry: Point(
+          coordinates: Position(plant['longitude'], plant['latitude']),
+        ),
+        image: bitmap,
+        iconSize: 1.0,
+      ),
+    );
+  }
+
+  void _showAddPlantSheet(Position tapped) {
+    final gridController = TextEditingController(text: widget.gridName);
+    final areaController = TextEditingController(text: widget.areaName);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Add Plant',
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Lat: ${tapped.lat.toStringAsFixed(6)}  Lng: ${tapped.lng.toStringAsFixed(6)}',
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // QR scan row
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.qr_code_scanner),
+                      label: const Text('Scan Plant QR Code'),
+                      onPressed: () async {
+                        Navigator.pop(sheetContext);
+                        final code = await context.push<String>('/scan');
+                        if (code == null ||
+                            code.isEmpty ||
+                            !code.startsWith('RSNN')) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Invalid or cancelled QR scan'),
+                            ),
+                          );
+                          return;
+                        }
+                        if (!mounted) return;
+                        _showAddPlantSheetWithQr(
+                          tapped,
+                          code,
+                          gridController.text,
+                          areaController.text,
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showAddPlantSheetWithQr(
+    Position tapped,
+    String qrCode,
+    String initialGrid,
+    String initialArea,
+  ) {
+    final gridController = TextEditingController(text: initialGrid);
+    final areaController = TextEditingController(text: initialArea);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        bool isSaving = false;
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Add Plant',
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Lat: ${tapped.lat.toStringAsFixed(6)}  Lng: ${tapped.lng.toStringAsFixed(6)}',
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.pinGreen.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: AppColors.pinGreen.withOpacity(0.4),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.qr_code_2,
+                          color: AppColors.pinGreen,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          qrCode,
+                          style: const TextStyle(
+                            color: AppColors.textPrimary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: gridController,
+                    style: const TextStyle(color: AppColors.textPrimary),
+                    decoration: const InputDecoration(
+                      labelText: 'Grid Name',
+                      labelStyle: TextStyle(color: AppColors.textSecondary),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: areaController,
+                    style: const TextStyle(color: AppColors.textPrimary),
+                    decoration: const InputDecoration(
+                      labelText: 'Area Name',
+                      labelStyle: TextStyle(color: AppColors.textSecondary),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: isSaving
+                          ? null
+                          : () async {
+                              setSheetState(() => isSaving = true);
+                              try {
+                                final response = await ApiService.post(
+                                  '/plants',
+                                  data: {
+                                    'qrCode': qrCode,
+                                    'gridName': gridController.text.trim(),
+                                    'areaName': areaController.text.trim(),
+                                    'latitude': tapped.lat,
+                                    'longitude': tapped.lng,
+                                  },
+                                );
+                                final newPlant = Map<String, dynamic>.from(
+                                  response.data,
+                                );
+                                if (!mounted) return;
+                                Navigator.pop(sheetContext);
+                                setState(() => _plants.add(newPlant));
+                                await _addPlantPin(newPlant);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Plant added!'),
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+                              } catch (e) {
+                                setSheetState(() => isSaving = false);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Error: ${e.toString()}'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
+                            },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: isSaving
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : const Text(
+                              'Save Plant',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _moveCameraToUser({bool animated = true}) async {
@@ -258,10 +524,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
       );
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // Polygon
-  // ---------------------------------------------------------------------------
 
   Future<void> _addGridPolygon(MapboxMap mapboxMap) async {
     try {
@@ -294,16 +556,10 @@ class _GridMapScreenState extends State<GridMapScreen> {
         ),
         LayerPosition(at: 0),
       );
-
-      debugPrint('✅ Polygon + outline added');
     } catch (e) {
       debugPrint('❌ Error adding polygon: $e');
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // Markers
-  // ---------------------------------------------------------------------------
 
   Future<void> _addPolygonCenterMarker(MapboxMap mapboxMap) async {
     try {
@@ -315,7 +571,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
       const size = 60.0;
 
       final paint = Paint()..color = Colors.green;
-
       canvas.drawCircle(const Offset(size / 2, size / 2 - 8), 18, paint);
 
       final path = Path()
@@ -343,24 +598,15 @@ class _GridMapScreenState extends State<GridMapScreen> {
           iconSize: 1.0,
         ),
       );
-
-      debugPrint('✅ Polygon center marker added');
     } catch (e) {
       debugPrint('❌ Error adding center marker: $e');
     }
   }
 
-  /// Draws a blue triangle arrow rotated by [heading] degrees (0 = north).
-  /// Heading comes exclusively from the compass, not GPS bearing.
-  Future<Uint8List> _createArrowBitmap(double heading) async {
+  Future<Uint8List> _createArrowBitmap() async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     const size = 80.0;
-    const center = Offset(size / 2, size / 2);
-
-    canvas.translate(center.dx, center.dy);
-    canvas.rotate(heading * (pi / 180.0));
-    canvas.translate(-center.dx, -center.dy);
 
     final arrowPaint = Paint()
       ..color = const Color(0xFF2196F3)
@@ -374,7 +620,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
       ..close();
 
     canvas.drawPath(arrowPath, arrowPaint);
-
     canvas.drawPath(
       arrowPath,
       Paint()
@@ -382,7 +627,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.5,
     );
-
     canvas.drawCircle(
       Offset(size / 2, size / 2 + 4),
       4,
@@ -400,7 +644,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
       _annotationManager = await mapboxMap.annotations
           .createPointAnnotationManager();
 
-      final bitmap = await _createArrowBitmap(_userHeading);
+      final bitmap = await _createArrowBitmap();
       final location = _userPosition ?? Position(_defaultLng, _defaultLat);
 
       _userAnnotation = await _annotationManager!.create(
@@ -408,41 +652,37 @@ class _GridMapScreenState extends State<GridMapScreen> {
           geometry: Point(coordinates: location),
           image: bitmap,
           iconSize: 1.0,
+          iconRotate: _userHeading,
         ),
       );
 
-      debugPrint('✅ Arrow marker added');
+      await _mapboxMap!.style.setStyleLayerProperty(
+        _annotationManager!.id,
+        'icon-rotation-alignment',
+        'map',
+      );
     } catch (e) {
       debugPrint('❌ Error adding arrow marker: $e');
     }
   }
 
-  Future<void> _updateArrowMarker() async {
+  Future<void> _updateArrowMarker({bool positionChanged = false}) async {
     try {
-      final bitmap = await _createArrowBitmap(_userHeading);
-      final location = _userPosition ?? Position(_defaultLng, _defaultLat);
-
-      _userAnnotation!.image = bitmap;
-      _userAnnotation!.geometry = Point(coordinates: location);
+      _userAnnotation!.iconRotate = _userHeading;
+      if (positionChanged && _userPosition != null) {
+        _userAnnotation!.geometry = Point(coordinates: _userPosition!);
+      }
       await _annotationManager!.update(_userAnnotation!);
-      debugPrint('🔄 Arrow updated — heading: $_userHeading°, pos: $location');
     } catch (e) {
       debugPrint('❌ Error updating arrow: $e');
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Recenter button
-  // ---------------------------------------------------------------------------
-
   Future<void> _recenter() async {
     if (kIsWeb || _mapboxMap == null) return;
-
     setState(() => _cameraFollowing = true);
-
     final target = _userPosition ?? Position(_defaultLng, _defaultLat);
     final zoom = _userPosition != null ? _followZoom : _defaultZoom;
-
     await _mapboxMap!.flyTo(
       CameraOptions(
         center: Point(coordinates: target),
@@ -451,10 +691,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
       MapAnimationOptions(duration: 600),
     );
   }
-
-  // ---------------------------------------------------------------------------
-  // UI
-  // ---------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -526,7 +762,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
           if (_permissionChecked)
             Positioned(
-              top: 16,
+              bottom: 200,
               right: 16,
               child: FloatingActionButton.small(
                 heroTag: 'grid_recenter',
@@ -581,7 +817,47 @@ class _GridMapScreenState extends State<GridMapScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: () => context.push('/scan'),
+                      onPressed: () async {
+                        if (_userPosition == null) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Could not get your location'),
+                            ),
+                          );
+                          return;
+                        }
+
+                        final inside = GeofenceUtils.isInsideArea(
+                          _userPosition!.lat.toDouble(),
+                          _userPosition!.lng.toDouble(),
+                        );
+
+                        if (!inside) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('You are outside the area.'),
+                            ),
+                          );
+                          return;
+                        }
+
+                        final code = await context.push<String>('/scan');
+
+                        if (code == null || code.isEmpty) return;
+
+                        if (!code.startsWith('RSNN')) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Invalid QR code')),
+                          );
+                          return;
+                        }
+
+                        if (!mounted) return;
+                        context.push('/data-entry', extra: {'qrCode': code});
+                      },
                       icon: const Icon(Icons.qr_code_scanner, size: 20),
                       label: const Text(
                         'Scan QR Code',
@@ -619,6 +895,15 @@ class _GridMapScreenState extends State<GridMapScreen> {
       ),
       onMapCreated: _onMapCreated,
       onStyleLoadedListener: _onStyleLoaded,
+      onScrollListener: (_) {
+        if (_cameraFollowing) {
+          setState(() => _cameraFollowing = false);
+        }
+      },
+      onTapListener: (MapContentGestureContext context) {
+        final tapped = context.point.coordinates;
+        _showAddPlantSheet(tapped);
+      },
     );
   }
 
