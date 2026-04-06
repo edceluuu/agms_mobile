@@ -67,6 +67,8 @@ class ApiService {
       _dio.post(path, data: data);
   static Future<Response> put(String path, {dynamic data}) =>
       _dio.put(path, data: data);
+  static Future<Response> patch(String path, {dynamic data}) =>
+      _dio.patch(path, data: data);
   static Future<Response> delete(String path) async {
     return await _dio.delete(path);
   }

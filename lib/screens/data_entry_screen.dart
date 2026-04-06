@@ -29,8 +29,6 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
   String _timestamp = '';
   String? _plantId;
   bool _isLoadingPlant = true;
-  String? _plantError;
-
   @override
   void initState() {
     super.initState();
@@ -53,14 +51,8 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
       debugPrint('🌿 Error fetching plant: $e');
       if (mounted) {
         setState(() {
-          _plantError = 'Plant not found for QR code: ${widget.qrCode}';
           _isLoadingPlant = false;
         });
-        _scrollController.animateTo(
-          0,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
       }
     }
   }
@@ -117,13 +109,34 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (_plantId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Plant not loaded yet. Please wait.'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
+      if (_latitude == null || _longitude == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Still fetching your location. Please wait.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+      try {
+        final createRes = await ApiService.post(
+          '/plants',
+          data: {
+            'qrCode': widget.qrCode,
+            'latitude': _latitude,
+            'longitude': _longitude,
+          },
+        );
+        _plantId = createRes.data['id'];
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to create plant: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
     }
 
     setState(() => _isSubmitting = true);
@@ -137,6 +150,13 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
           'girth': _girthInMeters,
         },
       );
+
+      if (_latitude != null && _longitude != null) {
+        await ApiService.patch(
+          '/plants/$_plantId/location',
+          data: {'latitude': _latitude, 'longitude': _longitude},
+        );
+      }
 
       setState(() => _isSubmitting = false);
       if (!mounted) return;
@@ -182,7 +202,13 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
         ),
       );
 
-      if (mounted) context.pop();
+      if (mounted)
+        context.pop({
+          'plantId': _plantId,
+          'qrCode': widget.qrCode,
+          'latitude': _latitude,
+          'longitude': _longitude,
+        });
     } catch (e) {
       setState(() => _isSubmitting = false);
       if (!mounted) return;
@@ -229,40 +255,6 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // ── 1. ERROR BANNER (top) ──────────────────────────────────
-                if (_plantError != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.red.withOpacity(0.4)),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.error_outline,
-                            color: Colors.red,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _plantError!,
-                              style: const TextStyle(
-                                color: Colors.red,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
                 // ── 2. QR BADGE ────────────────────────────────────────────
                 _QrBadge(
                   qrCode: widget.qrCode,

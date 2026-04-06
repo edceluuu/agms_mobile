@@ -67,6 +67,9 @@ class _GridMapScreenState extends State<GridMapScreen> {
   List<Map<String, dynamic>> _plants = [];
   PointAnnotationManager? _plantAnnotationManager;
 
+  // maps annotation id → plant data for tap detection
+  final Map<String, Map<String, dynamic>> _annotationPlantMap = {};
+
   static const double _defaultLat = 7.377146991499139;
   static const double _defaultLng = 125.83816973129873;
   static const double _defaultZoom = 14.0;
@@ -112,6 +115,8 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
   Future<void> _requestLocationPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    debugPrint('📍 Location service enabled: $serviceEnabled');
+
     if (!serviceEnabled) {
       setState(() {
         _locationPermissionGranted = false;
@@ -121,13 +126,18 @@ class _GridMapScreenState extends State<GridMapScreen> {
     }
 
     LocationPermission permission = await Geolocator.checkPermission();
+    debugPrint('📍 Permission status: $permission');
+
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
+      debugPrint('📍 Permission after request: $permission');
     }
 
     final granted =
         permission == LocationPermission.whileInUse ||
         permission == LocationPermission.always;
+
+    debugPrint('📍 Granted: $granted');
 
     if (granted) {
       await _fetchUserLocation();
@@ -174,6 +184,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
   }
 
   Future<void> _onStyleLoaded(StyleLoadedEventData data) async {
+    debugPrint('🗺️ Style loaded!');
     final mapboxMap = _mapboxMap;
     if (mapboxMap == null) return;
 
@@ -209,12 +220,21 @@ class _GridMapScreenState extends State<GridMapScreen> {
     try {
       final response = await ApiService.get('/plants/grid/${widget.gridName}');
       final List data = response.data;
+      debugPrint('🌿 Plants fetched: ${data.length}');
       _plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
 
-      _plantAnnotationManager ??= await mapboxMap.annotations
+      _plantAnnotationManager = await mapboxMap.annotations
           .createPointAnnotationManager();
 
+      // listen for pin taps
+      _plantAnnotationManager!.addOnPointAnnotationClickListener(
+        _PlantPinClickListener(_annotationPlantMap, _showPlantInfoSheet),
+      );
+
       for (final plant in _plants) {
+        debugPrint(
+          '📍 Pinning: ${plant['qrCode']} at ${plant['latitude']}, ${plant['longitude']}',
+        );
         await _addPlantPin(plant);
       }
     } catch (e) {
@@ -229,7 +249,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
     final canvas = Canvas(recorder);
     const size = 48.0;
 
-    // Red dot = not scanned this week
     final paint = Paint()..color = Colors.red;
     canvas.drawCircle(const Offset(size / 2, size / 2), 16, paint);
     canvas.drawCircle(
@@ -243,7 +262,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
     final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
     final bitmap = byteData!.buffer.asUint8List();
 
-    await _plantAnnotationManager!.create(
+    final annotation = await _plantAnnotationManager!.create(
       PointAnnotationOptions(
         geometry: Point(
           coordinates: Position(plant['longitude'], plant['latitude']),
@@ -252,254 +271,189 @@ class _GridMapScreenState extends State<GridMapScreen> {
         iconSize: 1.0,
       ),
     );
+
+    // store annotation id → plant mapping for tap detection
+    _annotationPlantMap[annotation.id] = plant;
   }
 
-  void _showAddPlantSheet(Position tapped) {
-    final gridController = TextEditingController(text: widget.gridName);
-    final areaController = TextEditingController(text: widget.areaName);
-
+  void _showPlantInfoSheet(Map<String, dynamic> plant) {
     showModalBottomSheet(
       context: context,
-      isScrollControlled: true,
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (sheetContext) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                left: 20,
-                right: 20,
-                top: 20,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+      builder: (_) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Plant Info',
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Add Plant',
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.07),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (plant['qrCode'] != null)
+                      _infoRow(Icons.qr_code_2, 'QR Code', plant['qrCode']),
+                    _infoRow(Icons.grid_on, 'Grid', plant['gridName']),
+                    _infoRow(Icons.location_on, 'Area', plant['areaName']),
+                    _infoRow(
+                      Icons.my_location,
+                      'Latitude',
+                      plant['latitude'].toStringAsFixed(6),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Lat: ${tapped.lat.toStringAsFixed(6)}  Lng: ${tapped.lng.toStringAsFixed(6)}',
-                    style: const TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 12,
+                    _infoRow(
+                      Icons.my_location,
+                      'Longitude',
+                      plant['longitude'].toStringAsFixed(6),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // QR scan row
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.qr_code_scanner),
-                      label: const Text('Scan Plant QR Code'),
-                      onPressed: () async {
-                        Navigator.pop(sheetContext);
-                        final code = await context.push<String>('/scan');
-                        if (code == null ||
-                            code.isEmpty ||
-                            !code.startsWith('RSNN')) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Invalid or cancelled QR scan'),
-                            ),
-                          );
-                          return;
-                        }
-                        if (!mounted) return;
-                        _showAddPlantSheetWithQr(
-                          tapped,
-                          code,
-                          gridController.text,
-                          areaController.text,
-                        );
-                      },
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            );
-          },
+              const SizedBox(height: 16),
+            ],
+          ),
         );
       },
     );
   }
 
-  void _showAddPlantSheetWithQr(
-    Position tapped,
-    String qrCode,
-    String initialGrid,
-    String initialArea,
-  ) {
-    final gridController = TextEditingController(text: initialGrid);
-    final areaController = TextEditingController(text: initialArea);
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+  Widget _infoRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        children: [
+          Icon(icon, color: AppColors.primary, size: 16),
+          const SizedBox(width: 8),
+          Text(
+            '$label: ',
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 13,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
       ),
-      builder: (sheetContext) {
-        bool isSaving = false;
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                left: 20,
-                right: 20,
-                top: 20,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+    );
+  }
+
+  void _showInvalidQrSnackbar() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(color: AppColors.pinRed.withOpacity(0.4)),
+        ),
+        margin: const EdgeInsets.all(16),
+        content: Row(
+          children: [
+            Icon(Icons.qr_code, color: AppColors.pinRed, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Invalid QR code.',
+                style: TextStyle(
+                  color: AppColors.pinRed,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Add Plant',
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Lat: ${tapped.lat.toStringAsFixed(6)}  Lng: ${tapped.lng.toStringAsFixed(6)}',
-                    style: const TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.pinGreen.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: AppColors.pinGreen.withOpacity(0.4),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.qr_code_2,
-                          color: AppColors.pinGreen,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          qrCode,
-                          style: const TextStyle(
-                            color: AppColors.textPrimary,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: gridController,
-                    style: const TextStyle(color: AppColors.textPrimary),
-                    decoration: const InputDecoration(
-                      labelText: 'Grid Name',
-                      labelStyle: TextStyle(color: AppColors.textSecondary),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: areaController,
-                    style: const TextStyle(color: AppColors.textPrimary),
-                    decoration: const InputDecoration(
-                      labelText: 'Area Name',
-                      labelStyle: TextStyle(color: AppColors.textSecondary),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: isSaving
-                          ? null
-                          : () async {
-                              setSheetState(() => isSaving = true);
-                              try {
-                                final response = await ApiService.post(
-                                  '/plants',
-                                  data: {
-                                    'qrCode': qrCode,
-                                    'gridName': gridController.text.trim(),
-                                    'areaName': areaController.text.trim(),
-                                    'latitude': tapped.lat,
-                                    'longitude': tapped.lng,
-                                  },
-                                );
-                                final newPlant = Map<String, dynamic>.from(
-                                  response.data,
-                                );
-                                if (!mounted) return;
-                                Navigator.pop(sheetContext);
-                                setState(() => _plants.add(newPlant));
-                                await _addPlantPin(newPlant);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Plant added!'),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-                              } catch (e) {
-                                setSheetState(() => isSaving = false);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Error: ${e.toString()}'),
-                                    backgroundColor: Colors.red,
-                                  ),
-                                );
-                              }
-                            },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      child: isSaving
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2,
-                              ),
-                            )
-                          : const Text(
-                              'Save Plant',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                    ),
-                  ),
-                ],
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _showOutsideSnackbar() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(color: AppColors.pinRed.withOpacity(0.4)),
+        ),
+        margin: const EdgeInsets.all(16),
+        content: Row(
+          children: [
+            Icon(Icons.location_off, color: AppColors.pinRed, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'You are outside the area.',
+                style: TextStyle(
+                  color: AppColors.pinRed,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
               ),
-            );
-          },
-        );
-      },
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _showErrorSnackbar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(color: AppColors.pinRed.withOpacity(0.4)),
+        ),
+        margin: const EdgeInsets.all(16),
+        content: Row(
+          children: [
+            Icon(Icons.error_outline, color: AppColors.pinRed, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(
+                  color: AppColors.pinRed,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 3),
+      ),
     );
   }
 
@@ -819,44 +773,45 @@ class _GridMapScreenState extends State<GridMapScreen> {
                     child: ElevatedButton.icon(
                       onPressed: () async {
                         if (_userPosition == null) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Could not get your location'),
-                            ),
+                          _showErrorSnackbar(
+                            'Still fetching your location. Please wait.',
                           );
                           return;
                         }
 
-                        final inside = GeofenceUtils.isInsideArea(
+                        final isInside = GeofenceUtils.isInsideArea(
                           _userPosition!.lat.toDouble(),
                           _userPosition!.lng.toDouble(),
                         );
 
-                        if (!inside) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('You are outside the area.'),
-                            ),
-                          );
+                        if (!isInside) {
+                          _showOutsideSnackbar();
                           return;
                         }
 
                         final code = await context.push<String>('/scan');
-
                         if (code == null || code.isEmpty) return;
-
+                        if (!mounted) return;
                         if (!code.startsWith('RSNN')) {
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Invalid QR code')),
-                          );
+                          _showInvalidQrSnackbar();
                           return;
                         }
-
+                        final result = await context.push<Map<String, dynamic>>(
+                          '/data-entry',
+                          extra: {'qrCode': code},
+                        );
+                        if (result == null) return;
                         if (!mounted) return;
-                        context.push('/data-entry', extra: {'qrCode': code});
+                        final newPlant = {
+                          'id': result['plantId'],
+                          'qrCode': result['qrCode'],
+                          'latitude': result['latitude'],
+                          'longitude': result['longitude'],
+                          'gridName': widget.gridName,
+                          'areaName': widget.areaName,
+                        };
+                        await _addPlantPin(newPlant);
+                        _annotationPlantMap[newPlant['id']] = newPlant;
                       },
                       icon: const Icon(Icons.qr_code_scanner, size: 20),
                       label: const Text(
@@ -899,10 +854,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
         if (_cameraFollowing) {
           setState(() => _cameraFollowing = false);
         }
-      },
-      onTapListener: (MapContentGestureContext context) {
-        final tapped = context.point.coordinates;
-        _showAddPlantSheet(tapped);
       },
     );
   }
@@ -995,5 +946,21 @@ class _GridMapScreenState extends State<GridMapScreen> {
         ],
       ),
     );
+  }
+}
+
+// handles plant pin tap events
+class _PlantPinClickListener extends OnPointAnnotationClickListener {
+  final Map<String, Map<String, dynamic>> annotationPlantMap;
+  final void Function(Map<String, dynamic>) onPlantTapped;
+
+  _PlantPinClickListener(this.annotationPlantMap, this.onPlantTapped);
+
+  @override
+  void onPointAnnotationClick(PointAnnotation annotation) {
+    final plant = annotationPlantMap[annotation.id];
+    if (plant != null) {
+      onPlantTapped(plant);
+    }
   }
 }
