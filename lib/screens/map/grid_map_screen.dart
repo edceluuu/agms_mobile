@@ -69,6 +69,8 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
   // maps annotation id → plant data for tap detection
   final Map<String, Map<String, dynamic>> _annotationPlantMap = {};
+  // maps plant id → annotation object for position updates
+  final Map<String, PointAnnotation> _plantAnnotationObjects = {};
 
   static const double _defaultLat = 7.377146991499139;
   static const double _defaultLng = 125.83816973129873;
@@ -274,6 +276,10 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
     // store annotation id → plant mapping for tap detection
     _annotationPlantMap[annotation.id] = plant;
+    // store plant id → annotation object for position updates
+    if (plant['id'] != null) {
+      _plantAnnotationObjects[plant['id']] = annotation;
+    }
   }
 
   void _showPlantInfoSheet(Map<String, dynamic> plant) {
@@ -393,6 +399,121 @@ class _GridMapScreenState extends State<GridMapScreen> {
         duration: const Duration(seconds: 3),
       ),
     );
+  }
+
+  Future<void> _addPlantWithQr() async {
+    if (_userPosition == null) {
+      _showErrorSnackbar('Still fetching your location. Please wait.');
+      return;
+    }
+
+    final isInside = GeofenceUtils.isInsideArea(
+      _userPosition!.lat.toDouble(),
+      _userPosition!.lng.toDouble(),
+    );
+
+    if (!isInside) {
+      _showOutsideSnackbar();
+      return;
+    }
+
+    final code = await context.push<String>('/scan');
+    if (code == null || code.isEmpty) return;
+    if (!mounted) return;
+
+    if (!code.startsWith('RSNN')) {
+      _showInvalidQrSnackbar();
+      return;
+    }
+
+    // check if QR code already exists
+    try {
+      await ApiService.get('/plants/$code');
+      // if we reach here, plant already exists
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(color: AppColors.pinRed.withOpacity(0.4)),
+          ),
+          margin: const EdgeInsets.all(16),
+          content: Row(
+            children: [
+              Icon(Icons.qr_code, color: AppColors.pinRed, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'QR code already exists.',
+                  style: TextStyle(
+                    color: AppColors.pinRed,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      // plant not found = QR code is new, safe to create
+      try {
+        final createRes = await ApiService.post(
+          '/plants',
+          data: {
+            'qrCode': code,
+            'latitude': _userPosition!.lat.toDouble(),
+            'longitude': _userPosition!.lng.toDouble(),
+            'gridName': widget.gridName,
+            'areaName': widget.areaName,
+          },
+        );
+        if (!mounted) return;
+        final newPlant = {
+          'id': createRes.data['id'],
+          'qrCode': code,
+          'latitude': _userPosition!.lat.toDouble(),
+          'longitude': _userPosition!.lng.toDouble(),
+          'gridName': widget.gridName,
+          'areaName': widget.areaName,
+        };
+        await _addPlantPin(newPlant);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.pinGreen,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.white, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Plant $code added successfully.',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      } catch (createError) {
+        if (!mounted) return;
+        _showErrorSnackbar('Failed to add plant. Please try again.');
+      }
+    }
   }
 
   void _showOutsideSnackbar() {
@@ -714,7 +835,27 @@ class _GridMapScreenState extends State<GridMapScreen> {
           else
             _buildMap(),
 
-          if (_permissionChecked)
+          if (_permissionChecked) ...[
+            Positioned(
+              bottom: 260,
+              right: 16,
+              child: FloatingActionButton.small(
+                heroTag: 'grid_add_plant',
+                backgroundColor: AppColors.primary,
+                onPressed: _addPlantWithQr,
+                child: const Icon(Icons.add, color: Colors.white),
+              ),
+            ),
+            Positioned(
+              bottom: 320,
+              right: 16,
+              child: FloatingActionButton.small(
+                heroTag: 'grid_history',
+                backgroundColor: AppColors.surface,
+                onPressed: () => context.push('/plant-history'),
+                child: const Icon(Icons.history, color: AppColors.primary),
+              ),
+            ),
             Positioned(
               bottom: 200,
               right: 16,
@@ -730,6 +871,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
                 ),
               ),
             ),
+          ],
 
           Positioned(
             bottom: 0,
@@ -796,22 +938,88 @@ class _GridMapScreenState extends State<GridMapScreen> {
                           _showInvalidQrSnackbar();
                           return;
                         }
+
+                        // check if plant exists before going to data entry
+                        try {
+                          await ApiService.get('/plants/$code');
+                        } catch (e) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              behavior: SnackBarBehavior.floating,
+                              backgroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                side: BorderSide(
+                                  color: AppColors.pinRed.withOpacity(0.4),
+                                ),
+                              ),
+                              margin: const EdgeInsets.all(16),
+                              content: Row(
+                                children: [
+                                  Icon(
+                                    Icons.warning_amber_rounded,
+                                    color: AppColors.pinRed,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      'Plant not found. Add the plant first using the + button.',
+                                      style: TextStyle(
+                                        color: AppColors.pinRed,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              duration: const Duration(seconds: 3),
+                            ),
+                          );
+                          return;
+                        }
+
+                        if (!mounted) return;
                         final result = await context.push<Map<String, dynamic>>(
                           '/data-entry',
                           extra: {'qrCode': code},
                         );
-                        if (result == null) return;
-                        if (!mounted) return;
-                        final newPlant = {
-                          'id': result['plantId'],
-                          'qrCode': result['qrCode'],
-                          'latitude': result['latitude'],
-                          'longitude': result['longitude'],
-                          'gridName': widget.gridName,
-                          'areaName': widget.areaName,
-                        };
-                        await _addPlantPin(newPlant);
-                        _annotationPlantMap[newPlant['id']] = newPlant;
+
+                        if (result != null && mounted) {
+                          final plantId = result['plantId'] as String?;
+                          final lat = result['latitude'] as double?;
+                          final lng = result['longitude'] as double?;
+
+                          if (plantId != null && lat != null && lng != null) {
+                            // find the annotation for this plant and update its position
+                            final entry = _annotationPlantMap.entries
+                                .firstWhere(
+                                  (e) => e.value['id'] == plantId,
+                                  orElse: () => MapEntry('', {}),
+                                );
+
+                            if (entry.key.isNotEmpty &&
+                                _plantAnnotationManager != null) {
+                              // update local plant data
+                              entry.value['latitude'] = lat;
+                              entry.value['longitude'] = lng;
+
+                              // directly look up and update the annotation
+                              final annotation =
+                                  _plantAnnotationObjects[plantId];
+                              if (annotation != null) {
+                                annotation.geometry = Point(
+                                  coordinates: Position(lng, lat),
+                                );
+                                await _plantAnnotationManager!.update(
+                                  annotation,
+                                );
+                              }
+                            }
+                          }
+                        }
                       },
                       icon: const Icon(Icons.qr_code_scanner, size: 20),
                       label: const Text(

@@ -109,34 +109,39 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (_plantId == null) {
-      if (_latitude == null || _longitude == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Still fetching your location. Please wait.'),
-            backgroundColor: Colors.orange,
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(color: AppColors.pinRed.withOpacity(0.4)),
           ),
-        );
-        return;
-      }
-      try {
-        final createRes = await ApiService.post(
-          '/plants',
-          data: {
-            'qrCode': widget.qrCode,
-            'latitude': _latitude,
-            'longitude': _longitude,
-          },
-        );
-        _plantId = createRes.data['id'];
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to create plant: ${e.toString()}'),
-            backgroundColor: Colors.red,
+          margin: const EdgeInsets.all(16),
+          content: Row(
+            children: [
+              Icon(
+                Icons.warning_amber_rounded,
+                color: AppColors.pinRed,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Plant not found. Add the plant first using the + button.',
+                  style: TextStyle(
+                    color: AppColors.pinRed,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
           ),
-        );
-        return;
-      }
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
     }
 
     setState(() => _isSubmitting = true);
