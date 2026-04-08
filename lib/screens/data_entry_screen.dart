@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import '../../utils/constants.dart';
-import 'package:geolocator/geolocator.dart';
 import '../../services/api_service.dart';
 
 class DataEntryScreen extends StatefulWidget {
@@ -22,33 +21,33 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
   final _girthController = TextEditingController();
 
   // true = CM, false = M
-  bool _heightInCm = true;
   bool _isSubmitting = false;
-  double? _latitude;
-  double? _longitude;
   String _timestamp = '';
   String? _plantId;
+  bool _heightInCm = true;
+  double? _latitude;
+  double? _longitude;
   bool _isLoadingPlant = true;
+
   @override
   void initState() {
     super.initState();
-    _loadLocationAndTime();
+    _loadTimestamp();
     _fetchPlant();
   }
 
   Future<void> _fetchPlant() async {
-    debugPrint('🌿 Fetching plant for QR: ${widget.qrCode}');
     try {
       final response = await ApiService.get('/plants/${widget.qrCode}');
-      debugPrint('🌿 Plant found: ${response.data}');
       if (mounted) {
         setState(() {
           _plantId = response.data['id'];
+          _latitude = (response.data['latitude'] as num?)?.toDouble();
+          _longitude = (response.data['longitude'] as num?)?.toDouble();
           _isLoadingPlant = false;
         });
       }
     } catch (e) {
-      debugPrint('🌿 Error fetching plant: $e');
       if (mounted) {
         setState(() {
           _isLoadingPlant = false;
@@ -65,28 +64,13 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
     super.dispose();
   }
 
-  Future<void> _loadLocationAndTime() async {
+  void _loadTimestamp() {
     final now = DateTime.now();
-    final timestamp =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
-
-    setState(() => _timestamp = timestamp);
-
-    try {
-      Position? position = await Geolocator.getLastKnownPosition();
-      position ??= await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-      if (mounted) {
-        setState(() {
-          _latitude = position!.latitude;
-          _longitude = position.longitude;
-        });
-      }
-    } catch (e) {
-      debugPrint('❌ Location error: $e');
-    }
+    setState(() {
+      _timestamp =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -108,6 +92,7 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+
     if (_plantId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -156,13 +141,6 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
         },
       );
 
-      if (_latitude != null && _longitude != null) {
-        await ApiService.patch(
-          '/plants/$_plantId/location',
-          data: {'latitude': _latitude, 'longitude': _longitude},
-        );
-      }
-
       setState(() => _isSubmitting = false);
       if (!mounted) return;
 
@@ -207,13 +185,9 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
         ),
       );
 
-      if (mounted)
-        context.pop({
-          'plantId': _plantId,
-          'qrCode': widget.qrCode,
-          'latitude': _latitude,
-          'longitude': _longitude,
-        });
+      if (mounted) {
+        context.pop({'plantId': _plantId, 'qrCode': widget.qrCode});
+      }
     } catch (e) {
       setState(() => _isSubmitting = false);
       if (!mounted) return;

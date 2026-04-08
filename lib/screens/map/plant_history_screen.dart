@@ -36,6 +36,50 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
     }
   }
 
+  Future<void> _deletePlant(String plantId) async {
+    try {
+      await ApiService.delete('/plants/$plantId');
+      setState(() {
+        _plants.removeWhere((p) => p['id'] == plantId);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.pinRed,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+            content: const Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white, size: 20),
+                SizedBox(width: 10),
+                Text(
+                  'Plant deleted.',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to delete: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   String _formatDate(String isoString) {
     final dt = DateTime.parse(isoString).toLocal();
     final months = [
@@ -107,6 +151,7 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
                       .map((r) => Map<String, dynamic>.from(r))
                       .toList(),
                   formatDate: _formatDate,
+                  onDelete: () => _deletePlant(plant['id']),
                 );
               },
             ),
@@ -118,11 +163,13 @@ class _PlantCard extends StatefulWidget {
   final Map<String, dynamic> plant;
   final List<Map<String, dynamic>> readings;
   final String Function(String) formatDate;
+  final VoidCallback onDelete;
 
   const _PlantCard({
     required this.plant,
     required this.readings,
     required this.formatDate,
+    required this.onDelete,
   });
 
   @override
@@ -187,6 +234,39 @@ class _PlantCardState extends State<_PlantCard> {
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
                         ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: () async {
+                        final confirm = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Delete Plant'),
+                            content: const Text(
+                              'Are you sure you want to delete this plant?',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, true),
+                                child: const Text(
+                                  'Delete',
+                                  style: TextStyle(color: Colors.red),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirm == true) widget.onDelete();
+                      },
+                      child: const Icon(
+                        Icons.delete_outline,
+                        color: Colors.red,
+                        size: 20,
                       ),
                     ),
                   ],

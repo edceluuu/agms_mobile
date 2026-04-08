@@ -9,6 +9,7 @@ import 'screens/map/grid_map_screen.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'screens/scanner/qr_scanner_screen.dart';
 import 'screens/data_entry_screen.dart';
+import 'screens/map/plant_history_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -50,6 +51,10 @@ final _router = GoRouter(
         final extra = state.extra as Map<String, dynamic>;
         return DataEntryScreen(qrCode: extra['qrCode'] as String);
       },
+    ),
+    GoRoute(
+      path: '/plant-history',
+      builder: (context, state) => const PlantHistoryScreen(),
     ),
   ],
 );

@@ -982,44 +982,10 @@ class _GridMapScreenState extends State<GridMapScreen> {
                         }
 
                         if (!mounted) return;
-                        final result = await context.push<Map<String, dynamic>>(
+                        await context.push<Map<String, dynamic>>(
                           '/data-entry',
                           extra: {'qrCode': code},
                         );
-
-                        if (result != null && mounted) {
-                          final plantId = result['plantId'] as String?;
-                          final lat = result['latitude'] as double?;
-                          final lng = result['longitude'] as double?;
-
-                          if (plantId != null && lat != null && lng != null) {
-                            // find the annotation for this plant and update its position
-                            final entry = _annotationPlantMap.entries
-                                .firstWhere(
-                                  (e) => e.value['id'] == plantId,
-                                  orElse: () => MapEntry('', {}),
-                                );
-
-                            if (entry.key.isNotEmpty &&
-                                _plantAnnotationManager != null) {
-                              // update local plant data
-                              entry.value['latitude'] = lat;
-                              entry.value['longitude'] = lng;
-
-                              // directly look up and update the annotation
-                              final annotation =
-                                  _plantAnnotationObjects[plantId];
-                              if (annotation != null) {
-                                annotation.geometry = Point(
-                                  coordinates: Position(lng, lat),
-                                );
-                                await _plantAnnotationManager!.update(
-                                  annotation,
-                                );
-                              }
-                            }
-                          }
-                        }
                       },
                       icon: const Icon(Icons.qr_code_scanner, size: 20),
                       label: const Text(
