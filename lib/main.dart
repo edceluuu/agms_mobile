@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'services/api_service.dart';
+import 'services/sync_service.dart';
 import 'storage/hive_storage.dart';
 import 'screens/splash_screen.dart';
 import 'screens/login_screen.dart';
@@ -17,6 +19,14 @@ void main() async {
   await HiveStorage.init();
   ApiService.init();
   debugPrint('🔵 BASE_URL: ${dotenv.env['BASE_URL']}');
+
+  // Sync any pending offline data whenever connectivity is restored
+  Connectivity().onConnectivityChanged.listen((result) {
+    if (result != ConnectivityResult.none) {
+      SyncService.syncAll();
+    }
+  });
+
   runApp(const AGMSApp());
 }
 
@@ -40,7 +50,6 @@ final _router = GoRouter(
         );
       },
     ),
-
     GoRoute(
       path: '/scan',
       builder: (context, state) => const QRScannerScreen(),
@@ -49,7 +58,10 @@ final _router = GoRouter(
       path: '/data-entry',
       builder: (context, state) {
         final extra = state.extra as Map<String, dynamic>;
-        return DataEntryScreen(qrCode: extra['qrCode'] as String);
+        return DataEntryScreen(
+          qrCode: extra['qrCode'] as String,
+          isOffline: (extra['isOffline'] as bool?) ?? false,
+        );
       },
     ),
     GoRoute(

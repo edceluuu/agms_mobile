@@ -4,14 +4,26 @@ import '../models/user_model.dart';
 import '../services/auth_service.dart';
 import '../utils/constants.dart';
 import '../widgets/offline_banner.dart';
+import '../services/api_service.dart';
 
 // Static grid data
 const _staticGrids = [
   {'name': 'Grid A', 'area': 'Area 1', 'plantCount': 32},
 ];
 
-class DashboardScreen extends StatelessWidget {
+class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  @override
+  void initState() {
+    super.initState();
+    ApiService.syncPendingReadings(); // fire-and-forget
+  }
 
   @override
   Widget build(BuildContext context) {

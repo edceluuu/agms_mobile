@@ -10,6 +10,11 @@ class HiveStorage {
     Hive.registerAdapter(UserModelAdapter());
     await Hive.openBox<UserModel>(_authBox);
     await Hive.openBox<String>(_tokenBox);
+    await Hive.openBox('plant_history');
+    await Hive.openBox('plant_pins');
+    await Hive.openBox('pending_readings');
+    await Hive.openBox('pending_plants');
+    await Hive.openBox('pending_deletions');
   }
 
   // User

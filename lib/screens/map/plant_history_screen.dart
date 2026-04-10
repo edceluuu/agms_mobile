@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import '../../services/api_service.dart';
 import '../../utils/constants.dart';
 
@@ -20,28 +21,49 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
     _fetchPlants();
   }
 
+  void _saveToCache(List<Map<String, dynamic>> plants) {
+    final box = Hive.box('plant_history');
+    box.put('plants', plants);
+  }
+
+  List<Map<String, dynamic>> _loadFromCache() {
+    final box = Hive.box('plant_history');
+    final raw = box.get('plants');
+    if (raw == null) return [];
+    return (raw as List)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
   Future<void> _fetchPlants() async {
     try {
       final response = await ApiService.get('/plants');
       final List data = response.data;
+      final plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
+      _saveToCache(plants);
       setState(() {
-        _plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
+        _plants = plants;
         _loading = false;
       });
     } catch (e) {
+      final cached = _loadFromCache();
       setState(() {
-        _error = 'Failed to load history.';
+        _plants = cached;
         _loading = false;
+        _error = cached.isEmpty ? 'Failed to load history.' : null;
       });
     }
   }
 
   Future<void> _deletePlant(String plantId) async {
+    // Optimistically remove from UI and cache immediately
+    setState(() {
+      _plants.removeWhere((p) => p['id'] == plantId);
+    });
+    _saveToCache(_plants);
+
     try {
       await ApiService.delete('/plants/$plantId');
-      setState(() {
-        _plants.removeWhere((p) => p['id'] == plantId);
-      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -68,12 +90,43 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (_) {
+      // Offline — queue the deletion for later sync
+      final box = Hive.box('pending_deletions');
+      final List pending = List.from(
+        box.get('plants', defaultValue: <dynamic>[]) as List,
+      );
+      if (!pending.contains(plantId)) {
+        pending.add(plantId);
+        await box.put('plants', pending);
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to delete: $e'),
-            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.orange,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+            content: const Row(
+              children: [
+                Icon(Icons.cloud_off, color: Colors.white, size: 20),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Deleted offline — will sync when back online.',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 3),
           ),
         );
       }
@@ -389,7 +442,15 @@ class _PlantCardState extends State<_PlantCard> {
                             Expanded(
                               child: _miniStat(
                                 'Height',
-                                '${reading['height']} cm',
+                                () {
+                                  final h = (reading['height'] as num)
+                                      .toDouble();
+                                  if (h < 1.0) {
+                                    return '${(h * 100).toStringAsFixed(1)} cm';
+                                  } else {
+                                    return '${h.toStringAsFixed(2)} m';
+                                  }
+                                }(),
                                 Icons.height,
                                 AppColors.pinBlue,
                               ),
@@ -398,7 +459,7 @@ class _PlantCardState extends State<_PlantCard> {
                             Expanded(
                               child: _miniStat(
                                 'Girth',
-                                '${reading['girth']} cm',
+                                '${(reading['girth'] as num).toStringAsFixed(2)} m',
                                 Icons.circle_outlined,
                                 AppColors.pinGreen,
                               ),

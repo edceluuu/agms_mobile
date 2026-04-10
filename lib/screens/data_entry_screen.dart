@@ -4,11 +4,17 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import '../../utils/constants.dart';
 import '../../services/api_service.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 class DataEntryScreen extends StatefulWidget {
   final String qrCode;
+  final bool isOffline;
 
-  const DataEntryScreen({super.key, required this.qrCode});
+  const DataEntryScreen({
+    super.key,
+    required this.qrCode,
+    this.isOffline = false,
+  });
 
   @override
   State<DataEntryScreen> createState() => _DataEntryScreenState();
@@ -87,13 +93,77 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
   String get _heightUnit => _heightInCm ? 'CM' : 'M';
 
   // ---------------------------------------------------------------------------
+  // Offline save
+  // ---------------------------------------------------------------------------
+
+  Future<void> _saveOffline() async {
+    setState(() => _isSubmitting = true);
+
+    final pendingBox = Hive.box('pending_readings');
+    final List existing = List.from(
+      pendingBox.get('readings', defaultValue: <dynamic>[]) as List,
+    );
+    existing.add({
+      'plantId': _plantId,
+      'qrCode': widget.qrCode,
+      'height': _heightInMeters,
+      'girth': _girthInMeters,
+      'recordedAt': DateTime.now().toIso8601String(),
+    });
+    await pendingBox.put('readings', existing);
+
+    setState(() => _isSubmitting = false);
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.orange,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+        content: const Row(
+          children: [
+            Icon(Icons.cloud_off, color: Colors.white, size: 20),
+            SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Saved offline',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                  Text(
+                    'Will sync when back online.',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        duration: Duration(seconds: 3),
+      ),
+    );
+
+    if (mounted) {
+      context.pop({'plantId': _plantId, 'qrCode': widget.qrCode});
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Submit
   // ---------------------------------------------------------------------------
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
-    if (_plantId == null) {
+    if (_plantId == null && !widget.isOffline) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
@@ -113,7 +183,7 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Plant not found. Add the plant first using the + button.',
+                  'Plant not found. Please scan the QR code again.',
                   style: TextStyle(
                     color: AppColors.pinRed,
                     fontWeight: FontWeight.bold,
@@ -129,74 +199,96 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
       return;
     }
 
+    // Online: try posting directly
+    // Offline: skip API call entirely, go straight to local save
+    if (widget.isOffline) {
+      await _saveOffline();
+      return;
+    }
+
     setState(() => _isSubmitting = true);
 
-    try {
-      await ApiService.post(
-        '/plants/readings',
-        data: {
-          'plantId': _plantId,
-          'height': _heightInMeters,
-          'girth': _girthInMeters,
-        },
-      );
-
-      setState(() => _isSubmitting = false);
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: AppColors.pinGreen,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-          margin: const EdgeInsets.all(16),
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white, size: 20),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Reading saved!',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                    ),
-                    Text(
-                      '${widget.qrCode} · H: ${_heightInMeters.toStringAsFixed(2)}m · G: ${_girthInMeters.toStringAsFixed(2)}m',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          duration: const Duration(seconds: 3),
-        ),
-      );
-
-      if (mounted) {
-        context.pop({'plantId': _plantId, 'qrCode': widget.qrCode});
+    // Try online first, fall back to local cache
+    bool savedOnline = false;
+    if (!widget.isOffline) {
+      try {
+        await ApiService.post(
+          '/plants/readings',
+          data: {
+            'plantId': _plantId,
+            'height': _heightInMeters,
+            'girth': _girthInMeters,
+          },
+        );
+        savedOnline = true;
+      } catch (_) {
+        // Will fall through to offline save
       }
-    } catch (e) {
-      setState(() => _isSubmitting = false);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to save: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
+    }
+
+    if (!savedOnline) {
+      // Save to pending_readings for later sync
+      final pendingBox = Hive.box('pending_readings');
+      final List existing = List.from(
+        pendingBox.get('readings', defaultValue: <dynamic>[]) as List,
       );
+      existing.add({
+        'plantId': _plantId,
+        'qrCode': widget.qrCode,
+        'height': _heightInMeters,
+        'girth': _girthInMeters,
+        'recordedAt': DateTime.now().toIso8601String(),
+      });
+      await pendingBox.put('readings', existing);
+    }
+
+    setState(() => _isSubmitting = false);
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: savedOnline ? AppColors.pinGreen : Colors.orange,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+        content: Row(
+          children: [
+            Icon(
+              savedOnline ? Icons.check_circle : Icons.cloud_off,
+              color: Colors.white,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    savedOnline ? 'Reading saved!' : 'Saved offline',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                  Text(
+                    savedOnline
+                        ? '${widget.qrCode} · H: ${_heightInMeters.toStringAsFixed(2)}m · G: ${_girthInMeters.toStringAsFixed(2)}m'
+                        : 'Will sync when back online.',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+
+    if (mounted) {
+      context.pop({'plantId': _plantId, 'qrCode': widget.qrCode});
     }
   }
 
