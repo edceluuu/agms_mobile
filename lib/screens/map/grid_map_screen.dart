@@ -834,6 +834,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
                         Map<String, dynamic>? existingPlant;
                         bool isOffline = false;
+                        bool isNewPlant = false;
 
                         // Step 1: Try API, fall back to cache
                         try {
@@ -847,67 +848,94 @@ class _GridMapScreenState extends State<GridMapScreen> {
                               .firstOrNull;
 
                           if (cachedPlant != null) {
+                            // Plant exists on the server — we're just offline right now
                             existingPlant = cachedPlant;
                             isOffline = true;
+                            isNewPlant = false; // pre-existing server plant
                           } else {
-                            // Not in cache — try to create online
-                            try {
-                              final createRes = await ApiService.post(
-                                '/plants',
-                                data: {
-                                  'qrCode': code,
-                                  'latitude': _userPosition!.lat.toDouble(),
-                                  'longitude': _userPosition!.lng.toDouble(),
-                                  'gridName': widget.gridName,
-                                  'areaName': widget.areaName,
-                                },
-                              );
-                              if (!mounted) return;
-                              final newPlant = {
-                                'id': createRes.data['id'],
-                                'qrCode': code,
-                                'latitude': _userPosition!.lat.toDouble(),
-                                'longitude': _userPosition!.lng.toDouble(),
-                                'gridName': widget.gridName,
-                                'areaName': widget.areaName,
-                              };
-                              await _addPlantPin(newPlant);
-                              existingPlant = newPlant;
-                            } catch (_) {
-                              if (!mounted) return;
+                            // Check pending_plants — maybe we already queued it this session
+                            final pendingBox = Hive.box('pending_plants');
+                            final List pendingList = List.from(
+                              pendingBox.get(
+                                    'plants',
+                                    defaultValue: <dynamic>[],
+                                  )
+                                  as List,
+                            );
+                            final pendingPlant = pendingList
+                                .where((p) => p['qrCode'] == code)
+                                .firstOrNull;
 
-                              // Save as pending plant so it syncs later
-                              final pendingBox = Hive.box('pending_plants');
-                              final List pendingList = List.from(
-                                pendingBox.get(
-                                      'plants',
-                                      defaultValue: <dynamic>[],
-                                    )
-                                    as List,
-                              );
-                              final alreadyPending = pendingList.any(
-                                (p) => p['qrCode'] == code,
-                              );
-                              if (!alreadyPending) {
-                                pendingList.add({
-                                  'qrCode': code,
-                                  'latitude': _userPosition!.lat.toDouble(),
-                                  'longitude': _userPosition!.lng.toDouble(),
-                                  'gridName': widget.gridName,
-                                  'areaName': widget.areaName,
-                                });
-                                await pendingBox.put('plants', pendingList);
-                              }
-
+                            if (pendingPlant != null) {
+                              // Already queued this session — don't queue again
                               existingPlant = {
                                 'id': null,
                                 'qrCode': code,
-                                'latitude': _userPosition!.lat.toDouble(),
-                                'longitude': _userPosition!.lng.toDouble(),
-                                'gridName': widget.gridName,
-                                'areaName': widget.areaName,
+                                'latitude': pendingPlant['latitude'],
+                                'longitude': pendingPlant['longitude'],
+                                'gridName': pendingPlant['gridName'],
+                                'areaName': pendingPlant['areaName'],
                               };
                               isOffline = true;
+                              isNewPlant =
+                                  false; // already queued, may already have a pending reading
+                            } else {
+                              // Truly new — not on server, not in cache, not pending
+                              // Try to create online first
+                              try {
+                                final createRes = await ApiService.post(
+                                  '/plants',
+                                  data: {
+                                    'qrCode': code,
+                                    'latitude': _userPosition!.lat.toDouble(),
+                                    'longitude': _userPosition!.lng.toDouble(),
+                                    'gridName': widget.gridName,
+                                    'areaName': widget.areaName,
+                                  },
+                                );
+                                if (!mounted) return;
+                                final newPlant = {
+                                  'id': createRes.data['id'],
+                                  'qrCode': code,
+                                  'latitude': _userPosition!.lat.toDouble(),
+                                  'longitude': _userPosition!.lng.toDouble(),
+                                  'gridName': widget.gridName,
+                                  'areaName': widget.areaName,
+                                };
+                                await _addPlantPin(newPlant);
+                                existingPlant = newPlant;
+                                isNewPlant =
+                                    true; // freshly created — definitely no readings yet
+                              } catch (_) {
+                                if (!mounted) return;
+
+                                // Fully offline and brand new — queue for later sync
+                                final alreadyPending = pendingList.any(
+                                  (p) => p['qrCode'] == code,
+                                );
+                                if (!alreadyPending) {
+                                  pendingList.add({
+                                    'qrCode': code,
+                                    'latitude': _userPosition!.lat.toDouble(),
+                                    'longitude': _userPosition!.lng.toDouble(),
+                                    'gridName': widget.gridName,
+                                    'areaName': widget.areaName,
+                                  });
+                                  await pendingBox.put('plants', pendingList);
+                                }
+
+                                existingPlant = {
+                                  'id': null,
+                                  'qrCode': code,
+                                  'latitude': _userPosition!.lat.toDouble(),
+                                  'longitude': _userPosition!.lng.toDouble(),
+                                  'gridName': widget.gridName,
+                                  'areaName': widget.areaName,
+                                };
+                                isOffline = true;
+                                isNewPlant =
+                                    true; // brand new, no readings possible yet
+                              }
                             }
                           }
                         }
@@ -918,7 +946,25 @@ class _GridMapScreenState extends State<GridMapScreen> {
                         final plantId = existingPlant['id'];
                         bool hasReadings = false;
 
+                        final debugPendingBox = Hive.box('pending_readings');
+                        final debugPending =
+                            debugPendingBox.get(
+                                  'readings',
+                                  defaultValue: <dynamic>[],
+                                )
+                                as List;
+                        debugPrint('🔍 isOffline: $isOffline');
+                        debugPrint('🔍 isNewPlant: $isNewPlant');
+                        debugPrint('🔍 code: $code');
+                        debugPrint(
+                          '🔍 pending_readings count: ${debugPending.length}',
+                        );
+                        for (final r in debugPending) {
+                          debugPrint('🔍 pending reading: ${r}');
+                        }
+
                         if (!isOffline) {
+                          // Online — ask the server directly
                           try {
                             final readingsRes = await ApiService.get(
                               '/plants/readings/$plantId',
@@ -928,10 +974,21 @@ class _GridMapScreenState extends State<GridMapScreen> {
                           } catch (_) {
                             hasReadings = false;
                           }
+                        } else if (isNewPlant) {
+                          // Brand new plant (queued offline this session) —
+                          // only block if a pending reading already exists for it
+                          final pendingBox = Hive.box('pending_readings');
+                          final pending =
+                              pendingBox.get(
+                                    'readings',
+                                    defaultValue: <dynamic>[],
+                                  )
+                                  as List;
+                          hasReadings = pending.any((r) => r['qrCode'] == code);
                         } else {
-                          // Only block if a reading exists for this QR code.
-                          // A plant in pending_plants with no reading yet
-                          // should always proceed to data entry.
+                          // Pre-existing server plant viewed offline —
+                          // we can't reach the server to check real readings,
+                          // so only block if a pending reading was added this session
                           final pendingBox = Hive.box('pending_readings');
                           final pending =
                               pendingBox.get(
@@ -941,7 +998,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
                                   as List;
                           hasReadings = pending.any((r) => r['qrCode'] == code);
                         }
-
                         if (!mounted) return;
 
                         if (hasReadings) {

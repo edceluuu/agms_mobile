@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class AppConstants {
-  static const String baseUrl = 'http://10.60.62.53:3000/api';
+  static const String baseUrl = 'http://10.70.108.53:3000/api';
   //static String get baseUrl =>
   //dotenv.env['BASE_URL'] ?? 'http://10.0.2.2:3000/api';
   //static const String baseUrl = 'http://localhost:3000/api';

@@ -56,7 +56,7 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
   }
 
   Future<void> _deletePlant(String plantId) async {
-    // Optimistically remove from UI and cache immediately
+    // Optimistically remove from UI and update cache immediately
     setState(() {
       _plants.removeWhere((p) => p['id'] == plantId);
     });
@@ -91,7 +91,7 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
         );
       }
     } catch (_) {
-      // Offline — queue the deletion for later sync
+      // Offline — queue for later sync
       final box = Hive.box('pending_deletions');
       final List pending = List.from(
         box.get('plants', defaultValue: <dynamic>[]) as List,
