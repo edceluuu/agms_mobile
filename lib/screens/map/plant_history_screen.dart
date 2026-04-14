@@ -86,8 +86,39 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
       });
     } catch (e) {
       final cached = _loadFromCache();
+
+      // Apply week filter locally when offline
+      List<Map<String, dynamic>> filtered = cached;
+      if (_selectedWeek != null && _selectedYear != null) {
+        filtered = cached.where((plant) {
+          final readings = (plant['readings'] as List?) ?? [];
+          return readings.any((r) {
+            final recordedAt = DateTime.tryParse(
+              r['recordedAt'] as String? ?? '',
+            );
+            if (recordedAt == null) return false;
+            return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
+                recordedAt.year == _selectedYear;
+          });
+        }).toList();
+
+        // Also trim each plant's readings to only that week
+        filtered = filtered.map((plant) {
+          final readings = (plant['readings'] as List?) ?? [];
+          final weekReadings = readings.where((r) {
+            final recordedAt = DateTime.tryParse(
+              r['recordedAt'] as String? ?? '',
+            );
+            if (recordedAt == null) return false;
+            return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
+                recordedAt.year == _selectedYear;
+          }).toList();
+          return {...plant, 'readings': weekReadings};
+        }).toList();
+      }
+
       setState(() {
-        _plants = cached;
+        _plants = filtered;
         _loading = false;
         _error = cached.isEmpty ? 'Failed to load history.' : null;
       });
