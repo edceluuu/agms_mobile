@@ -10,9 +10,11 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart'
 import 'package:geolocator/geolocator.dart' hide Position;
 import '../../utils/constants.dart';
 import '../../utils/geofence_utils.dart';
+import '../../utils/pin_color_utils.dart';
 import 'package:go_router/go_router.dart';
 import '../../services/api_service.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import '../../main.dart';
 
 class GridMapScreen extends StatefulWidget {
   final String gridName;
@@ -86,13 +88,25 @@ class _GridMapScreenState extends State<GridMapScreen> {
       _requestLocationPermission();
       _startCompassStream();
     }
+    // Redraw pins whenever a sync completes
+    syncCompleteNotifier.addListener(_onSyncComplete);
   }
 
   @override
   void dispose() {
     _positionStream?.cancel();
     _compassStream?.cancel();
+    syncCompleteNotifier.removeListener(_onSyncComplete);
     super.dispose();
+  }
+
+  Future<void> _onSyncComplete() async {
+    if (!mounted || _mapboxMap == null) return;
+    debugPrint('🔄 Sync complete — redrawing pins');
+    _annotationPlantMap.clear();
+    _plantAnnotationObjects.clear();
+    await _plantAnnotationManager?.deleteAll();
+    await _loadAndPinPlants(_mapboxMap!);
   }
 
   void _startCompassStream() {
@@ -261,6 +275,13 @@ class _GridMapScreenState extends State<GridMapScreen> {
     }
   }
 
+  bool _hasPendingReading(String? qrCode) {
+    if (qrCode == null) return false;
+    final box = Hive.box('pending_readings');
+    final pending = box.get('readings', defaultValue: <dynamic>[]) as List;
+    return pending.any((r) => r['qrCode'] == qrCode);
+  }
+
   Future<void> _addPlantPin(Map<String, dynamic> plant) async {
     if (_plantAnnotationManager == null) return;
 
@@ -268,7 +289,28 @@ class _GridMapScreenState extends State<GridMapScreen> {
     final canvas = Canvas(recorder);
     const size = 48.0;
 
-    final paint = Paint()..color = Colors.red;
+    final hasPending = _hasPendingReading(plant['qrCode'] as String?);
+
+    // Check if this plant is pending deactivation (deactivated offline, not yet synced)
+    final deactivationsBox = Hive.box('pending_deactivations');
+    final List pendingDeactivations = List.from(
+      deactivationsBox.get('plants', defaultValue: <dynamic>[]) as List,
+    );
+    final plantIdStr = plant['id']?.toString();
+    final isPendingDeactivation =
+        plantIdStr != null &&
+        pendingDeactivations.any((d) => d.toString() == plantIdStr);
+
+    // Override isActive if pending deactivation
+    final plantForColor = isPendingDeactivation
+        ? {...plant, 'isActive': false}
+        : plant;
+
+    final color = PinColorUtils.pinColor(
+      plantForColor,
+      hasPendingReading: hasPending,
+    );
+    final paint = Paint()..color = color;
     canvas.drawCircle(const Offset(size / 2, size / 2), 16, paint);
     canvas.drawCircle(
       const Offset(size / 2, size / 2),
@@ -744,7 +786,15 @@ class _GridMapScreenState extends State<GridMapScreen> {
               child: FloatingActionButton.small(
                 heroTag: 'grid_history',
                 backgroundColor: AppColors.surface,
-                onPressed: () => context.push('/plant-history'),
+                onPressed: () async {
+                  await context.push('/plant-history');
+                  if (mounted && _mapboxMap != null) {
+                    _annotationPlantMap.clear();
+                    _plantAnnotationObjects.clear();
+                    await _plantAnnotationManager?.deleteAll();
+                    await _loadAndPinPlants(_mapboxMap!);
+                  }
+                },
                 child: const Icon(Icons.history, color: AppColors.primary),
               ),
             ),
@@ -836,18 +886,54 @@ class _GridMapScreenState extends State<GridMapScreen> {
                         bool isOffline = false;
                         bool isNewPlant = false;
 
+                        // 🔍 DEBUG — check what's in each Hive box before anything runs
+                        final debugCache = _loadPinsFromCache();
+                        debugPrint(
+                          '🔍 plant_pins cache count: ${debugCache.length}',
+                        );
+                        for (final p in debugCache) {
+                          debugPrint('🔍 cached pin: ${p['qrCode']}');
+                        }
+                        final debugPendingPlants =
+                            Hive.box(
+                                  'pending_plants',
+                                ).get('plants', defaultValue: <dynamic>[])
+                                as List;
+                        debugPrint(
+                          '🔍 pending_plants count: ${debugPendingPlants.length}',
+                        );
+                        for (final p in debugPendingPlants) {
+                          debugPrint('🔍 pending plant: ${p['qrCode']}');
+                        }
+                        final debugPendingReadings =
+                            Hive.box(
+                                  'pending_readings',
+                                ).get('readings', defaultValue: <dynamic>[])
+                                as List;
+                        debugPrint(
+                          '🔍 pending_readings count: ${debugPendingReadings.length}',
+                        );
+                        for (final r in debugPendingReadings) {
+                          debugPrint('🔍 pending reading: ${r['qrCode']}');
+                        }
+                        debugPrint('🔍 scanned QR code: $code');
+
                         // Step 1: Try API, fall back to cache
                         try {
                           final res = await ApiService.get('/plants/$code');
                           existingPlant = Map<String, dynamic>.from(res.data);
-                        } catch (_) {
+                        } catch (apiError) {
+                          final isNotFound = apiError.toString().contains(
+                            '404',
+                          );
+
                           // Check cache first before trying to create
                           final cached = _loadPinsFromCache();
                           final cachedPlant = cached
                               .where((p) => p['qrCode'] == code)
                               .firstOrNull;
 
-                          if (cachedPlant != null) {
+                          if (cachedPlant != null && !isNotFound) {
                             // Plant exists on the server — we're just offline right now
                             existingPlant = cachedPlant;
                             isOffline = true;
@@ -875,10 +961,12 @@ class _GridMapScreenState extends State<GridMapScreen> {
                                 'longitude': pendingPlant['longitude'],
                                 'gridName': pendingPlant['gridName'],
                                 'areaName': pendingPlant['areaName'],
+                                'readings': [],
+                                'isActive': true,
                               };
                               isOffline = true;
                               isNewPlant =
-                                  false; // already queued, may already have a pending reading
+                                  true; // never synced to server — treat as new
                             } else {
                               // Truly new — not on server, not in cache, not pending
                               // Try to create online first
@@ -894,6 +982,9 @@ class _GridMapScreenState extends State<GridMapScreen> {
                                   },
                                 );
                                 if (!mounted) return;
+                                debugPrint(
+                                  '🆔 New plant ID from server: ${createRes.data['id']}',
+                                );
                                 final newPlant = {
                                   'id': createRes.data['id'],
                                   'qrCode': code,
@@ -901,9 +992,13 @@ class _GridMapScreenState extends State<GridMapScreen> {
                                   'longitude': _userPosition!.lng.toDouble(),
                                   'gridName': widget.gridName,
                                   'areaName': widget.areaName,
+                                  'readings': [],
+                                  'isActive': true,
                                 };
                                 await _addPlantPin(newPlant);
                                 existingPlant = newPlant;
+                                isOffline =
+                                    false; // explicitly online — API call succeeded
                                 isNewPlant =
                                     true; // freshly created — definitely no readings yet
                               } catch (_) {
@@ -931,10 +1026,13 @@ class _GridMapScreenState extends State<GridMapScreen> {
                                   'longitude': _userPosition!.lng.toDouble(),
                                   'gridName': widget.gridName,
                                   'areaName': widget.areaName,
+                                  'readings': [],
+                                  'isActive': true,
                                 };
                                 isOffline = true;
-                                isNewPlant =
-                                    true; // brand new, no readings possible yet
+                                isNewPlant = true;
+                                // Pin it immediately on the map as green
+                                await _addPlantPin(existingPlant!);
                               }
                             }
                           }
@@ -1041,42 +1139,20 @@ class _GridMapScreenState extends State<GridMapScreen> {
                         // Step 3: Navigate to data entry
                         await context.push<Map<String, dynamic>>(
                           '/data-entry',
-                          extra: {'qrCode': code, 'isOffline': isOffline},
+                          extra: {
+                            'qrCode': code,
+                            'isOffline': isOffline,
+                            'plantId':
+                                existingPlant['id'], // pass directly — avoids re-fetch race condition
+                          },
                         );
 
-                        // Show offline snackbar after returning from data entry
-                        if (isOffline && mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              behavior: SnackBarBehavior.floating,
-                              backgroundColor: Colors.orange,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              margin: const EdgeInsets.all(16),
-                              content: const Row(
-                                children: [
-                                  Icon(
-                                    Icons.cloud_off,
-                                    color: Colors.white,
-                                    size: 20,
-                                  ),
-                                  SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      'Saved offline — will sync when back online.',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              duration: Duration(seconds: 3),
-                            ),
-                          );
+                        // Redraw all pins to reflect updated state
+                        if (mounted && _mapboxMap != null) {
+                          _annotationPlantMap.clear();
+                          _plantAnnotationObjects.clear();
+                          await _plantAnnotationManager?.deleteAll();
+                          await _loadAndPinPlants(_mapboxMap!);
                         }
                       },
                       icon: const Icon(Icons.qr_code_scanner, size: 20),

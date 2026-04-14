@@ -4,8 +4,27 @@ import 'api_service.dart';
 class SyncService {
   static Future<void> syncAll() async {
     await _syncPendingDeletions();
-    await _syncPendingPlants(); // must run before readings so plantIds get patched
+    await _syncPendingDeactivations();
+    await _syncPendingPlants();
     await _syncPendingReadings();
+  }
+
+  static Future<void> _syncPendingDeactivations() async {
+    final box = Hive.box('pending_deactivations');
+    final List pending = List.from(
+      box.get('plants', defaultValue: <dynamic>[]) as List,
+    );
+    if (pending.isEmpty) return;
+
+    final List failed = [];
+    for (final plantId in pending) {
+      try {
+        await ApiService.patch('/plants/$plantId/deactivate', data: {});
+      } catch (_) {
+        failed.add(plantId);
+      }
+    }
+    await box.put('plants', failed);
   }
 
   static Future<void> _syncPendingDeletions() async {

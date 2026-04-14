@@ -4,7 +4,7 @@ import '../models/user_model.dart';
 import '../services/auth_service.dart';
 import '../utils/constants.dart';
 import '../widgets/offline_banner.dart';
-import '../services/api_service.dart';
+import '../services/sync_service.dart';
 
 // Static grid data
 const _staticGrids = [
@@ -22,7 +22,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    ApiService.syncPendingReadings(); // fire-and-forget
+    SyncService.syncAll(); // fire-and-forget
   }
 
   @override

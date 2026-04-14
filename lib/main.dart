@@ -13,6 +13,9 @@ import 'screens/scanner/qr_scanner_screen.dart';
 import 'screens/data_entry_screen.dart';
 import 'screens/map/plant_history_screen.dart';
 
+// Global notifier — flips whenever a sync completes so the map can redraw
+final syncCompleteNotifier = ValueNotifier<bool>(false);
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: ".env");
@@ -21,10 +24,16 @@ void main() async {
   debugPrint('🔵 BASE_URL: ${dotenv.env['BASE_URL']}');
 
   // Sync any pending offline data whenever connectivity is restored
+  bool wasOffline = false;
   Connectivity().onConnectivityChanged.listen((result) {
-    if (result != ConnectivityResult.none) {
-      SyncService.syncAll();
+    final isOnline = result != ConnectivityResult.none;
+    if (isOnline && wasOffline) {
+      SyncService.syncAll().then((_) {
+        // Notify the map to redraw pins after sync completes
+        syncCompleteNotifier.value = !syncCompleteNotifier.value;
+      });
     }
+    wasOffline = !isOnline;
   });
 
   runApp(const AGMSApp());
@@ -61,6 +70,7 @@ final _router = GoRouter(
         return DataEntryScreen(
           qrCode: extra['qrCode'] as String,
           isOffline: (extra['isOffline'] as bool?) ?? false,
+          plantId: extra['plantId'] as String?,
         );
       },
     ),

@@ -15,6 +15,7 @@ class HiveStorage {
     await Hive.openBox('pending_readings');
     await Hive.openBox('pending_plants');
     await Hive.openBox('pending_deletions');
+    await Hive.openBox('pending_deactivations');
   }
 
   // User
