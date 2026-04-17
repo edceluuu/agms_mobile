@@ -4,7 +4,6 @@ import '../models/user_model.dart';
 import '../services/auth_service.dart';
 import '../utils/constants.dart';
 import '../widgets/offline_banner.dart';
-import '../services/sync_service.dart';
 
 // Static grid data
 const _staticGrids = [
@@ -22,7 +21,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    SyncService.syncAll(); // fire-and-forget
   }
 
   @override
@@ -110,7 +108,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _roleBadge(String role) {
     final colors = {
       'ADMIN': AppColors.pinBlue,
-      'SUPERVISOR': AppColors.pinYellow,
+      'SUPERVISOR': const Color(0xFFD69E2E),
       'FIELD_USER': AppColors.pinGreen,
     };
     return Container(
@@ -138,7 +136,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       'ADMIN': [
         _statCard('Total Plants', '248', Icons.forest, AppColors.pinGreen),
         _statCard('Active Users', '12', Icons.people, AppColors.pinBlue),
-        _statCard('Flagged Readings', '3', Icons.flag, AppColors.pinRed),
+        _statCard('Flagged Readings', '3', Icons.flag, Colors.red),
         _statCard(
           'Weekly Compliance',
           '87%',
@@ -154,14 +152,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Icons.qr_code_scanner,
           AppColors.pinGreen,
         ),
-        _statCard('Pending Scans', '32', Icons.pending, AppColors.pinYellow),
-        _statCard('Flagged', '2', Icons.flag, AppColors.pinRed),
+        _statCard(
+          'Pending Scans',
+          '32',
+          Icons.pending,
+          const Color(0xFFD69E2E),
+        ),
+        _statCard('Flagged', '2', Icons.flag, Colors.red),
       ],
       'FIELD_USER': [
         _statCard('My Plants Today', '24', Icons.eco, AppColors.pinGreen),
         _statCard('Scanned', '18', Icons.check, AppColors.primary),
-        _statCard('Pending', '6', Icons.schedule, AppColors.pinYellow),
-        _statCard('Flagged', '1', Icons.warning, AppColors.pinRed),
+        _statCard('Pending', '6', Icons.schedule, const Color(0xFFD69E2E)),
+        _statCard('Flagged', '1', Icons.warning, Colors.red),
       ],
     };
 

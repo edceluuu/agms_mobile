@@ -11,6 +11,7 @@ import 'package:geolocator/geolocator.dart' hide Position;
 import '../../utils/constants.dart';
 import '../../utils/geofence_utils.dart';
 import '../../utils/pin_color_utils.dart';
+import '../../utils/week_utils.dart';
 import 'package:go_router/go_router.dart';
 import '../../services/api_service.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -248,35 +249,34 @@ class _GridMapScreenState extends State<GridMapScreen> {
   }
 
   Future<void> _loadAndPinPlants(MapboxMap mapboxMap) async {
+    // Nuke the pin cache before every online fetch so stale QR codes never survive
+    Hive.box('plant_pins').delete('pins_${widget.gridName}');
+
     try {
       final response = await ApiService.get('/plants/grid/${widget.gridName}');
       final List data = response.data;
       debugPrint('🌿 Plants fetched: ${data.length}');
       _plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
+
+      // Replace cache entirely with server truth — removes ghost entries
       _savePinsToCache(_plants);
+
+      // Remove from pending_plants any QR codes the server already knows about
+      final serverQrCodes = _plants.map((p) => p['qrCode']).toSet();
+      final pendingPlantsBox = Hive.box('pending_plants');
+      final List pendingList = List.from(
+        pendingPlantsBox.get('plants', defaultValue: <dynamic>[]) as List,
+      );
+      final cleanedPending = pendingList
+          .where((p) => !serverQrCodes.contains(p['qrCode']))
+          .toList();
+      await pendingPlantsBox.put('plants', cleanedPending);
     } catch (e) {
       debugPrint('⚠️ Offline or error — loading pins from cache: $e');
       _plants = _loadPinsFromCache();
       debugPrint('🌿 Plants from cache: ${_plants.length}');
 
-      // Apply pending deactivations to cached plants
-      final deactivationsBox = Hive.box('pending_deactivations');
-      final List pendingDeactivations = List.from(
-        deactivationsBox.get('plants', defaultValue: <dynamic>[]) as List,
-      );
-      if (pendingDeactivations.isNotEmpty) {
-        _plants = _plants.map((plant) {
-          final plantIdStr = plant['id']?.toString();
-          final isPending =
-              plantIdStr != null &&
-              pendingDeactivations.any((d) => d.toString() == plantIdStr);
-          if (isPending) return {...plant, 'isActive': false};
-          return plant;
-        }).toList();
-        debugPrint(
-          '⚫ Applied ${pendingDeactivations.length} pending deactivation(s) to cached pins',
-        );
-      }
+      // No pending deactivations in new 3-color system
     }
 
     _plantAnnotationManager = await mapboxMap.annotations
@@ -291,6 +291,116 @@ class _GridMapScreenState extends State<GridMapScreen> {
         '📍 Pinning: ${plant['qrCode']} at ${plant['latitude']}, ${plant['longitude']}',
       );
       await _addPlantPin(plant);
+    }
+  }
+
+  Future<void> _uploadAll() async {
+    final pendingBox = Hive.box('pending_readings');
+    final List pending = List.from(
+      pendingBox.get('readings', defaultValue: <dynamic>[]) as List,
+    );
+
+    if (pending.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(color: AppColors.pinGreen.withOpacity(0.4)),
+          ),
+          margin: const EdgeInsets.all(16),
+          content: const Row(
+            children: [
+              Icon(Icons.check_circle, color: AppColors.pinGreen, size: 20),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Nothing to upload — all readings are synced.',
+                  style: TextStyle(
+                    color: Colors.black87,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    final List failed = [];
+    int successCount = 0;
+
+    for (final reading in pending) {
+      try {
+        final plantId = reading['plantId'];
+        await ApiService.post(
+          '/plants/$plantId/readings',
+          data: {
+            'height': reading['height'],
+            'girth': reading['girth'],
+            'recordedBy': reading['recordedBy'],
+          },
+        );
+        successCount++;
+      } catch (_) {
+        failed.add(reading);
+      }
+    }
+
+    await pendingBox.put('readings', failed);
+    if (!mounted) return;
+
+    final allUploaded = failed.isEmpty;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(
+            color: allUploaded
+                ? AppColors.pinGreen.withOpacity(0.4)
+                : AppColors.pinGray.withOpacity(0.4),
+          ),
+        ),
+        margin: const EdgeInsets.all(16),
+        content: Row(
+          children: [
+            Icon(
+              allUploaded ? Icons.cloud_done : Icons.cloud_off,
+              color: allUploaded ? AppColors.pinGreen : AppColors.pinGray,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                allUploaded
+                    ? '$successCount reading(s) uploaded successfully.'
+                    : '$successCount uploaded, ${failed.length} failed. Try again when online.',
+                style: const TextStyle(
+                  color: Colors.black87,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+
+    // Redraw pins — uploaded readings go from Blue → Green
+    if (mounted && _mapboxMap != null) {
+      _annotationPlantMap.clear();
+      _plantAnnotationObjects.clear();
+      await _plantAnnotationManager?.deleteAll();
+      await _loadAndPinPlants(_mapboxMap!);
     }
   }
 
@@ -310,29 +420,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
     final hasPending = _hasPendingReading(plant['qrCode'] as String?);
 
-    // Check if this plant is pending deactivation (deactivated offline, not yet synced)
-    final deactivationsBox = Hive.box('pending_deactivations');
-    final List pendingDeactivations = List.from(
-      deactivationsBox.get('plants', defaultValue: <dynamic>[]) as List,
-    );
-    final plantIdStr = plant['id']?.toString();
-    final isPendingDeactivation =
-        plantIdStr != null &&
-        pendingDeactivations.any((d) => d.toString() == plantIdStr);
-
-    final isActive = isPendingDeactivation
-        ? false
-        : (plant['isActive'] as bool? ?? true);
-
-    // Override isActive if pending deactivation
-    final plantForColor = isPendingDeactivation
-        ? {...plant, 'isActive': false}
-        : plant;
-
-    final color = PinColorUtils.pinColor(
-      plantForColor,
-      hasPendingReading: hasPending,
-    );
+    final color = PinColorUtils.pinColor(plant, hasPendingReading: hasPending);
     final paint = Paint()..color = color;
     canvas.drawCircle(const Offset(size / 2, size / 2), 16, paint);
     canvas.drawCircle(
@@ -459,18 +547,18 @@ class _GridMapScreenState extends State<GridMapScreen> {
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
-          side: BorderSide(color: AppColors.pinRed.withOpacity(0.4)),
+          side: BorderSide(color: Colors.red.withOpacity(0.4)),
         ),
         margin: const EdgeInsets.all(16),
-        content: Row(
+        content: const Row(
           children: [
-            Icon(Icons.qr_code, color: AppColors.pinRed, size: 20),
-            const SizedBox(width: 10),
+            Icon(Icons.qr_code, color: Colors.red, size: 20),
+            SizedBox(width: 10),
             Expanded(
               child: Text(
                 'Invalid QR code.',
                 style: TextStyle(
-                  color: AppColors.pinRed,
+                  color: Colors.red,
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                 ),
@@ -490,18 +578,18 @@ class _GridMapScreenState extends State<GridMapScreen> {
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
-          side: BorderSide(color: AppColors.pinRed.withOpacity(0.4)),
+          side: BorderSide(color: Colors.red.withOpacity(0.4)),
         ),
         margin: const EdgeInsets.all(16),
-        content: Row(
+        content: const Row(
           children: [
-            Icon(Icons.location_off, color: AppColors.pinRed, size: 20),
-            const SizedBox(width: 10),
+            Icon(Icons.location_off, color: Colors.red, size: 20),
+            SizedBox(width: 10),
             Expanded(
               child: Text(
                 'You are outside the area.',
                 style: TextStyle(
-                  color: AppColors.pinRed,
+                  color: Colors.red,
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                 ),
@@ -521,18 +609,18 @@ class _GridMapScreenState extends State<GridMapScreen> {
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
-          side: BorderSide(color: AppColors.pinRed.withOpacity(0.4)),
+          side: BorderSide(color: Colors.red.withOpacity(0.4)),
         ),
         margin: const EdgeInsets.all(16),
         content: Row(
           children: [
-            Icon(Icons.error_outline, color: AppColors.pinRed, size: 20),
+            const Icon(Icons.error_outline, color: Colors.red, size: 20),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
                 message,
-                style: TextStyle(
-                  color: AppColors.pinRed,
+                style: const TextStyle(
+                  color: Colors.red,
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                 ),
@@ -864,7 +952,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
                       _infoChip(
                         Icons.location_on,
                         widget.areaName,
-                        AppColors.pinYellow,
+                        AppColors.pinBlue,
                       ),
                       const SizedBox(width: 10),
                       _infoChip(
@@ -875,326 +963,411 @@ class _GridMapScreenState extends State<GridMapScreen> {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () async {
-                        if (_userPosition == null) {
-                          _showErrorSnackbar(
-                            'Still fetching your location. Please wait.',
-                          );
-                          return;
-                        }
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _uploadAll,
+                          icon: const Icon(Icons.cloud_upload, size: 18),
+                          label: const Text(
+                            'Upload All',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.pinGreen,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () async {
+                            if (_userPosition == null) {
+                              _showErrorSnackbar(
+                                'Still fetching your location. Please wait.',
+                              );
+                              return;
+                            }
 
-                        final isInside = GeofenceUtils.isInsideArea(
-                          _userPosition!.lat.toDouble(),
-                          _userPosition!.lng.toDouble(),
-                        );
-
-                        if (!isInside) {
-                          _showOutsideSnackbar();
-                          return;
-                        }
-
-                        final code = await context.push<String>('/scan');
-                        if (code == null || code.isEmpty) return;
-                        if (!mounted) return;
-
-                        if (!code.startsWith('RSNN')) {
-                          _showInvalidQrSnackbar();
-                          return;
-                        }
-
-                        Map<String, dynamic>? existingPlant;
-                        bool isOffline = false;
-                        bool isNewPlant = false;
-
-                        // 🔍 DEBUG — check what's in each Hive box before anything runs
-                        final debugCache = _loadPinsFromCache();
-                        debugPrint(
-                          '🔍 plant_pins cache count: ${debugCache.length}',
-                        );
-                        for (final p in debugCache) {
-                          debugPrint('🔍 cached pin: ${p['qrCode']}');
-                        }
-                        final debugPendingPlants =
-                            Hive.box(
-                                  'pending_plants',
-                                ).get('plants', defaultValue: <dynamic>[])
-                                as List;
-                        debugPrint(
-                          '🔍 pending_plants count: ${debugPendingPlants.length}',
-                        );
-                        for (final p in debugPendingPlants) {
-                          debugPrint('🔍 pending plant: ${p['qrCode']}');
-                        }
-                        final debugPendingReadings =
-                            Hive.box(
-                                  'pending_readings',
-                                ).get('readings', defaultValue: <dynamic>[])
-                                as List;
-                        debugPrint(
-                          '🔍 pending_readings count: ${debugPendingReadings.length}',
-                        );
-                        for (final r in debugPendingReadings) {
-                          debugPrint('🔍 pending reading: ${r['qrCode']}');
-                        }
-                        debugPrint('🔍 scanned QR code: $code');
-
-                        // Step 1: Try API, fall back to cache
-                        try {
-                          final res = await ApiService.get('/plants/$code');
-                          existingPlant = Map<String, dynamic>.from(res.data);
-                        } catch (apiError) {
-                          final isNotFound = apiError.toString().contains(
-                            '404',
-                          );
-
-                          // Check cache first before trying to create
-                          final cached = _loadPinsFromCache();
-                          final cachedPlant = cached
-                              .where((p) => p['qrCode'] == code)
-                              .firstOrNull;
-
-                          if (cachedPlant != null && !isNotFound) {
-                            // Plant exists on the server — we're just offline right now
-                            existingPlant = cachedPlant;
-                            isOffline = true;
-                            isNewPlant = false; // pre-existing server plant
-                          } else {
-                            // Check pending_plants — maybe we already queued it this session
-                            final pendingBox = Hive.box('pending_plants');
-                            final List pendingList = List.from(
-                              pendingBox.get(
-                                    'plants',
-                                    defaultValue: <dynamic>[],
-                                  )
-                                  as List,
+                            final isInside = GeofenceUtils.isInsideArea(
+                              _userPosition!.lat.toDouble(),
+                              _userPosition!.lng.toDouble(),
                             );
-                            final pendingPlant = pendingList
-                                .where((p) => p['qrCode'] == code)
-                                .firstOrNull;
 
-                            if (pendingPlant != null) {
-                              // Already queued this session — don't queue again
-                              existingPlant = {
-                                'id': null,
-                                'qrCode': code,
-                                'latitude': pendingPlant['latitude'],
-                                'longitude': pendingPlant['longitude'],
-                                'gridName': pendingPlant['gridName'],
-                                'areaName': pendingPlant['areaName'],
-                                'readings': [],
-                                'isActive': true,
-                              };
-                              isOffline = true;
-                              isNewPlant =
-                                  true; // never synced to server — treat as new
-                            } else {
-                              // Truly new — not on server, not in cache, not pending
-                              // Try to create online first
-                              try {
-                                final createRes = await ApiService.post(
-                                  '/plants',
-                                  data: {
-                                    'qrCode': code,
-                                    'latitude': _userPosition!.lat.toDouble(),
-                                    'longitude': _userPosition!.lng.toDouble(),
-                                    'gridName': widget.gridName,
-                                    'areaName': widget.areaName,
-                                  },
-                                );
-                                if (!mounted) return;
-                                debugPrint(
-                                  '🆔 New plant ID from server: ${createRes.data['id']}',
-                                );
-                                final newPlant = {
-                                  'id': createRes.data['id'],
-                                  'qrCode': code,
-                                  'latitude': _userPosition!.lat.toDouble(),
-                                  'longitude': _userPosition!.lng.toDouble(),
-                                  'gridName': widget.gridName,
-                                  'areaName': widget.areaName,
-                                  'readings': [],
-                                  'isActive': true,
-                                };
-                                await _addPlantPin(newPlant);
-                                existingPlant = newPlant;
-                                isOffline =
-                                    false; // explicitly online — API call succeeded
-                                isNewPlant =
-                                    true; // freshly created — definitely no readings yet
-                              } catch (_) {
-                                if (!mounted) return;
+                            if (!isInside) {
+                              _showOutsideSnackbar();
+                              return;
+                            }
 
-                                // Fully offline and brand new — queue for later sync
-                                final alreadyPending = pendingList.any(
-                                  (p) => p['qrCode'] == code,
-                                );
-                                if (!alreadyPending) {
-                                  pendingList.add({
-                                    'qrCode': code,
-                                    'latitude': _userPosition!.lat.toDouble(),
-                                    'longitude': _userPosition!.lng.toDouble(),
-                                    'gridName': widget.gridName,
-                                    'areaName': widget.areaName,
-                                  });
-                                  await pendingBox.put('plants', pendingList);
-                                }
+                            final code = await context.push<String>('/scan');
+                            if (code == null || code.isEmpty) return;
+                            if (!mounted) return;
 
-                                existingPlant = {
-                                  'id': null,
-                                  'qrCode': code,
-                                  'latitude': _userPosition!.lat.toDouble(),
-                                  'longitude': _userPosition!.lng.toDouble(),
-                                  'gridName': widget.gridName,
-                                  'areaName': widget.areaName,
-                                  'readings': [],
-                                  'isActive': true,
-                                };
+                            if (!code.startsWith('RSNN')) {
+                              _showInvalidQrSnackbar();
+                              return;
+                            }
+
+                            Map<String, dynamic>? existingPlant;
+                            bool isOffline = false;
+                            bool isNewPlant = false;
+
+                            // 🔍 DEBUG — check what's in each Hive box before anything runs
+                            final debugCache = _loadPinsFromCache();
+                            debugPrint(
+                              '🔍 plant_pins cache count: ${debugCache.length}',
+                            );
+                            for (final p in debugCache) {
+                              debugPrint('🔍 cached pin: ${p['qrCode']}');
+                            }
+                            final debugPendingPlants =
+                                Hive.box(
+                                      'pending_plants',
+                                    ).get('plants', defaultValue: <dynamic>[])
+                                    as List;
+                            debugPrint(
+                              '🔍 pending_plants count: ${debugPendingPlants.length}',
+                            );
+                            for (final p in debugPendingPlants) {
+                              debugPrint('🔍 pending plant: ${p['qrCode']}');
+                            }
+                            final debugPendingReadings =
+                                Hive.box(
+                                      'pending_readings',
+                                    ).get('readings', defaultValue: <dynamic>[])
+                                    as List;
+                            debugPrint(
+                              '🔍 pending_readings count: ${debugPendingReadings.length}',
+                            );
+                            for (final r in debugPendingReadings) {
+                              debugPrint('🔍 pending reading: ${r['qrCode']}');
+                            }
+                            debugPrint('🔍 scanned QR code: $code');
+
+                            // Step 1: Try API, fall back to cache
+                            try {
+                              final res = await ApiService.get('/plants/$code');
+                              existingPlant = Map<String, dynamic>.from(
+                                res.data,
+                              );
+                            } catch (apiError) {
+                              final isNotFound = apiError.toString().contains(
+                                '404',
+                              );
+
+                              // Check cache first before trying to create
+                              final cached = _loadPinsFromCache();
+
+                              // Exclude anything queued for deletion
+                              final pendingDeletionsBox = Hive.box(
+                                'pending_deletions',
+                              );
+                              final List pendingDeleted = List.from(
+                                pendingDeletionsBox.get(
+                                      'plants',
+                                      defaultValue: <dynamic>[],
+                                    )
+                                    as List,
+                              );
+                              final cachedPlant = cached
+                                  .where(
+                                    (p) =>
+                                        p['qrCode'] == code &&
+                                        !pendingDeleted.contains(p['id']),
+                                  )
+                                  .firstOrNull;
+
+                              if (cachedPlant != null && !isNotFound) {
+                                // Plant exists on the server — we're just offline right now
+                                existingPlant = cachedPlant;
                                 isOffline = true;
-                                isNewPlant = true;
-                                // Pin it immediately on the map as green
-                                await _addPlantPin(existingPlant!);
+                                isNewPlant = false; // pre-existing server plant
+                              } else {
+                                // Check pending_plants — maybe we already queued it this session
+                                final pendingBox = Hive.box('pending_plants');
+                                final List pendingList = List.from(
+                                  pendingBox.get(
+                                        'plants',
+                                        defaultValue: <dynamic>[],
+                                      )
+                                      as List,
+                                );
+                                final pendingPlant = pendingList
+                                    .where((p) => p['qrCode'] == code)
+                                    .firstOrNull;
+
+                                if (pendingPlant != null) {
+                                  // Already queued this session — don't queue again
+                                  existingPlant = {
+                                    'id': null,
+                                    'qrCode': code,
+                                    'latitude': pendingPlant['latitude'],
+                                    'longitude': pendingPlant['longitude'],
+                                    'gridName': pendingPlant['gridName'],
+                                    'areaName': pendingPlant['areaName'],
+                                    'readings': [],
+                                    'isActive': true,
+                                  };
+                                  isOffline = true;
+                                  isNewPlant =
+                                      true; // never synced to server — treat as new
+                                } else {
+                                  // Truly new — not on server, not in cache, not pending
+                                  // Try to create online first
+                                  try {
+                                    final createRes = await ApiService.post(
+                                      '/plants',
+                                      data: {
+                                        'qrCode': code,
+                                        'latitude': _userPosition!.lat
+                                            .toDouble(),
+                                        'longitude': _userPosition!.lng
+                                            .toDouble(),
+                                        'gridName': widget.gridName,
+                                        'areaName': widget.areaName,
+                                      },
+                                    );
+                                    if (!mounted) return;
+                                    debugPrint(
+                                      '🆔 New plant ID from server: ${createRes.data['id']}',
+                                    );
+                                    final newPlant = {
+                                      'id': createRes.data['id'],
+                                      'qrCode': code,
+                                      'latitude': _userPosition!.lat.toDouble(),
+                                      'longitude': _userPosition!.lng
+                                          .toDouble(),
+                                      'gridName': widget.gridName,
+                                      'areaName': widget.areaName,
+                                      'readings': [],
+                                      'isActive': true,
+                                    };
+                                    await _addPlantPin(newPlant);
+                                    existingPlant = newPlant;
+                                    isOffline =
+                                        false; // explicitly online — API call succeeded
+                                    isNewPlant =
+                                        true; // freshly created — definitely no readings yet
+                                  } catch (_) {
+                                    if (!mounted) return;
+
+                                    // Fully offline and brand new — queue for later sync
+                                    final alreadyPending = pendingList.any(
+                                      (p) => p['qrCode'] == code,
+                                    );
+                                    if (!alreadyPending) {
+                                      pendingList.add({
+                                        'qrCode': code,
+                                        'latitude': _userPosition!.lat
+                                            .toDouble(),
+                                        'longitude': _userPosition!.lng
+                                            .toDouble(),
+                                        'gridName': widget.gridName,
+                                        'areaName': widget.areaName,
+                                      });
+                                      await pendingBox.put(
+                                        'plants',
+                                        pendingList,
+                                      );
+                                    }
+
+                                    existingPlant = {
+                                      'id': null,
+                                      'qrCode': code,
+                                      'latitude': _userPosition!.lat.toDouble(),
+                                      'longitude': _userPosition!.lng
+                                          .toDouble(),
+                                      'gridName': widget.gridName,
+                                      'areaName': widget.areaName,
+                                      'readings': [],
+                                      'isActive': true,
+                                    };
+                                    isOffline = true;
+                                    isNewPlant = true;
+                                    // Draw red pin immediately — plant exists but has no reading yet
+                                    await _addPlantPin(existingPlant!);
+                                  }
+                                }
                               }
                             }
-                          }
-                        }
 
-                        if (!mounted) return;
+                            if (!mounted) return;
 
-                        // Step 2: Check readings (online) or pending_readings cache (offline)
-                        final plantId = existingPlant['id'];
-                        bool hasReadings = false;
+                            // Step 2: Check readings (online) or pending_readings cache (offline)
+                            final plantId = existingPlant['id'];
+                            bool hasReadings = false;
 
-                        final debugPendingBox = Hive.box('pending_readings');
-                        final debugPending =
-                            debugPendingBox.get(
-                                  'readings',
-                                  defaultValue: <dynamic>[],
-                                )
-                                as List;
-                        debugPrint('🔍 isOffline: $isOffline');
-                        debugPrint('🔍 isNewPlant: $isNewPlant');
-                        debugPrint('🔍 code: $code');
-                        debugPrint(
-                          '🔍 pending_readings count: ${debugPending.length}',
-                        );
-                        for (final r in debugPending) {
-                          debugPrint('🔍 pending reading: ${r}');
-                        }
-
-                        if (!isOffline) {
-                          // Online — ask the server directly
-                          try {
-                            final readingsRes = await ApiService.get(
-                              '/plants/readings/$plantId',
+                            final debugPendingBox = Hive.box(
+                              'pending_readings',
                             );
-                            final List readings = readingsRes.data;
-                            hasReadings = readings.isNotEmpty;
-                          } catch (_) {
-                            hasReadings = false;
-                          }
-                        } else if (isNewPlant) {
-                          // Brand new plant (queued offline this session) —
-                          // only block if a pending reading already exists for it
-                          final pendingBox = Hive.box('pending_readings');
-                          final pending =
-                              pendingBox.get(
-                                    'readings',
-                                    defaultValue: <dynamic>[],
-                                  )
-                                  as List;
-                          hasReadings = pending.any((r) => r['qrCode'] == code);
-                        } else {
-                          // Pre-existing server plant viewed offline —
-                          // we can't reach the server to check real readings,
-                          // so only block if a pending reading was added this session
-                          final pendingBox = Hive.box('pending_readings');
-                          final pending =
-                              pendingBox.get(
-                                    'readings',
-                                    defaultValue: <dynamic>[],
-                                  )
-                                  as List;
-                          hasReadings = pending.any((r) => r['qrCode'] == code);
-                        }
-                        if (!mounted) return;
+                            final debugPending =
+                                debugPendingBox.get(
+                                      'readings',
+                                      defaultValue: <dynamic>[],
+                                    )
+                                    as List;
+                            debugPrint('🔍 isOffline: $isOffline');
+                            debugPrint('🔍 isNewPlant: $isNewPlant');
+                            debugPrint('🔍 code: $code');
+                            debugPrint(
+                              '🔍 pending_readings count: ${debugPending.length}',
+                            );
+                            for (final r in debugPending) {
+                              debugPrint('🔍 pending reading: ${r}');
+                            }
 
-                        if (hasReadings) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              behavior: SnackBarBehavior.floating,
-                              backgroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10),
-                                side: BorderSide(
-                                  color: AppColors.pinRed.withOpacity(0.4),
-                                ),
-                              ),
-                              margin: const EdgeInsets.all(16),
-                              content: Row(
-                                children: [
-                                  Icon(
-                                    Icons.block,
-                                    color: AppColors.pinRed,
-                                    size: 20,
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      'Already recorded — this plant has already been recorded.',
-                                      style: TextStyle(
-                                        color: AppColors.pinRed,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                      ),
+                            if (!isOffline) {
+                              // Online — ask the server directly, but only count readings from THIS week
+                              try {
+                                final readingsRes = await ApiService.get(
+                                  '/plants/readings/$plantId',
+                                );
+                                final List readings = readingsRes.data;
+                                hasReadings = readings.any((r) {
+                                  final map = Map<String, dynamic>.from(
+                                    r as Map,
+                                  );
+                                  final recordedAt = DateTime.tryParse(
+                                    map['recordedAt'] as String? ?? '',
+                                  );
+                                  if (recordedAt == null) return false;
+                                  return WeekUtils.isoWeekNumber(recordedAt) ==
+                                          WeekUtils.currentWeek &&
+                                      recordedAt.year == WeekUtils.currentYear;
+                                });
+                              } catch (_) {
+                                hasReadings = false;
+                              }
+                            } else if (isNewPlant) {
+                              // Brand new plant (queued offline this session) —
+                              // only block if a pending reading already exists for it
+                              final pendingBox = Hive.box('pending_readings');
+                              final pending =
+                                  pendingBox.get(
+                                        'readings',
+                                        defaultValue: <dynamic>[],
+                                      )
+                                      as List;
+                              hasReadings = pending.any(
+                                (r) => r['qrCode'] == code,
+                              );
+                            } else {
+                              // Pre-existing server plant viewed offline —
+                              // we can't reach the server to check real readings,
+                              // so only block if a pending reading was added this session
+                              final pendingBox = Hive.box('pending_readings');
+                              final pending =
+                                  pendingBox.get(
+                                        'readings',
+                                        defaultValue: <dynamic>[],
+                                      )
+                                      as List;
+                              hasReadings = pending.any(
+                                (r) => r['qrCode'] == code,
+                              );
+                            }
+                            if (!mounted) return;
+
+                            if (hasReadings) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  behavior: SnackBarBehavior.floating,
+                                  backgroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    side: BorderSide(
+                                      color: Colors.red.withOpacity(0.4),
                                     ),
                                   ),
-                                ],
-                              ),
-                              duration: const Duration(seconds: 3),
-                            ),
-                          );
-                          return;
-                        }
+                                  margin: const EdgeInsets.all(16),
+                                  content: const Row(
+                                    children: [
+                                      Icon(
+                                        Icons.block,
+                                        color: Colors.red,
+                                        size: 20,
+                                      ),
+                                      SizedBox(width: 10),
+                                      Expanded(
+                                        child: Text(
+                                          'Already recorded — this plant has already been recorded.',
+                                          style: TextStyle(
+                                            color: Colors.red,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  duration: const Duration(seconds: 3),
+                                ),
+                              );
+                              return;
+                            }
 
-                        // Step 3: Navigate to data entry
-                        await context.push<Map<String, dynamic>>(
-                          '/data-entry',
-                          extra: {
-                            'qrCode': code,
-                            'isOffline': isOffline,
-                            'plantId':
-                                existingPlant['id'], // pass directly — avoids re-fetch race condition
+                            // Step 3: Navigate to data entry
+                            await context.push<Map<String, dynamic>>(
+                              '/data-entry',
+                              extra: {
+                                'qrCode': code,
+                                'isOffline': isOffline,
+                                'plantId':
+                                    existingPlant['id'], // pass directly — avoids re-fetch race condition
+                              },
+                            );
+
+                            // Redraw all pins to reflect updated state
+                            if (mounted && _mapboxMap != null) {
+                              _annotationPlantMap.clear();
+                              _plantAnnotationObjects.clear();
+                              await _plantAnnotationManager?.deleteAll();
+                              await _loadAndPinPlants(_mapboxMap!);
+
+                              // If this was a new offline plant, re-add it explicitly
+                              // since it won't be in the server response or plant_pins cache yet
+                              if (isOffline &&
+                                  isNewPlant &&
+                                  existingPlant != null) {
+                                final alreadyPinned = _annotationPlantMap.values
+                                    .any(
+                                      (p) =>
+                                          p['qrCode'] ==
+                                          existingPlant!['qrCode'],
+                                    );
+                                if (!alreadyPinned) {
+                                  await _addPlantPin(existingPlant!);
+                                }
+                              }
+                            }
                           },
-                        );
-
-                        // Redraw all pins to reflect updated state
-                        if (mounted && _mapboxMap != null) {
-                          _annotationPlantMap.clear();
-                          _plantAnnotationObjects.clear();
-                          await _plantAnnotationManager?.deleteAll();
-                          await _loadAndPinPlants(_mapboxMap!);
-                        }
-                      },
-                      icon: const Icon(Icons.qr_code_scanner, size: 20),
-                      label: const Text(
-                        'Scan QR Code',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
+                          icon: const Icon(Icons.qr_code_scanner, size: 20),
+                          label: const Text(
+                            'Scan QR Code',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
                         ),
                       ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    ),
+                    ],
                   ),
                 ],
               ),

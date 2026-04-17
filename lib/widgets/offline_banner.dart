@@ -14,7 +14,7 @@ class OfflineBanner extends StatelessWidget {
         if (isOnline) return const SizedBox.shrink();
         return Container(
           width: double.infinity,
-          color: AppColors.pinYellow,
+          color: Colors.redAccent, // Or Colors.red
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: const Text(
             '⚠ No internet connection — offline mode',
