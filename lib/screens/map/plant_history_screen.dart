@@ -69,6 +69,52 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
         .toList();
   }
 
+  // Merges pending_readings from Hive into the plant list
+  List<Map<String, dynamic>> _mergePendingReadings(
+    List<Map<String, dynamic>> plants,
+  ) {
+    final pendingBox = Hive.box('pending_readings');
+    final List pending = List.from(
+      pendingBox.get('readings', defaultValue: <dynamic>[]) as List,
+    );
+    if (pending.isEmpty) return plants;
+
+    return plants.map((plant) {
+      final qrCode = plant['qrCode'] as String?;
+      final existingReadings = List<Map<String, dynamic>>.from(
+        ((plant['readings'] as List?) ?? []).map(
+          (r) => Map<String, dynamic>.from(r as Map),
+        ),
+      );
+
+      // Find any pending readings that belong to this plant
+      final pendingReadings = pending
+          .where((r) => r['qrCode'] == qrCode)
+          .map(
+            (r) => {
+              'height': r['height'],
+              'girth': r['girth'],
+              'recordedAt': r['recordedAt'],
+              'weekNumber': WeekUtils.isoWeekNumber(
+                DateTime.parse(r['recordedAt'] as String),
+              ),
+              'year': DateTime.parse(r['recordedAt'] as String).year,
+              'isFlagged': false,
+              'flagReason': null,
+              'user': {'name': 'Pending upload'},
+            },
+          )
+          .toList();
+
+      if (pendingReadings.isEmpty) return plant;
+
+      return {
+        ...plant,
+        'readings': [...pendingReadings, ...existingReadings],
+      };
+    }).toList();
+  }
+
   Future<void> _fetchPlants() async {
     try {
       // Build query string if a specific week is selected
@@ -78,14 +124,21 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
       }
       final response = await ApiService.get(endpoint);
       final List data = response.data;
-      final plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
+      var plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
       _saveToCache(plants);
+
+      // Merge any locally pending readings so they appear immediately
+      plants = _mergePendingReadings(plants);
+
       setState(() {
         _plants = plants;
         _loading = false;
       });
     } catch (e) {
-      final cached = _loadFromCache();
+      var cached = _loadFromCache();
+
+      // Merge pending readings into cached plants too
+      cached = _mergePendingReadings(cached);
 
       // Apply week filter locally when offline
       List<Map<String, dynamic>> filtered = cached;
