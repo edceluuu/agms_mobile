@@ -16,6 +16,7 @@ import '../../services/api_service.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../../main.dart';
 import '../../services/sync_service.dart';
+import '../../utils/week_utils.dart';
 
 class GridMapScreen extends StatefulWidget {
   final String gridName;
@@ -1168,31 +1169,50 @@ class _GridMapScreenState extends State<GridMapScreen> {
                         }
 
                         if (!isOffline) {
-                          // Online — ask the server directly
+                          // Online — only block if a reading exists THIS week
                           try {
                             final readingsRes = await ApiService.get(
                               '/plants/readings/$plantId',
                             );
                             final List readings = readingsRes.data;
-                            hasReadings = readings.isNotEmpty;
+                            final currentWeek = WeekUtils.currentWeek;
+                            final currentYear = WeekUtils.currentYear;
+                            // Check pending_readings for this week too
+                            final pendingBox = Hive.box('pending_readings');
+                            final pending =
+                                pendingBox.get(
+                                      'readings',
+                                      defaultValue: <dynamic>[],
+                                    )
+                                    as List;
+                            final hasPendingThisWeek = pending.any((r) {
+                              if (r['qrCode'] != code) return false;
+                              final recordedAt = DateTime.tryParse(
+                                r['recordedAt'] as String? ?? '',
+                              );
+                              if (recordedAt == null) return false;
+                              return WeekUtils.isoWeekNumber(recordedAt) ==
+                                      currentWeek &&
+                                  recordedAt.year == currentYear;
+                            });
+                            final hasServerReadingThisWeek = readings.any((r) {
+                              final map = Map<String, dynamic>.from(r as Map);
+                              final recordedAt = DateTime.tryParse(
+                                map['recordedAt'] as String? ?? '',
+                              );
+                              if (recordedAt == null) return false;
+                              return WeekUtils.isoWeekNumber(recordedAt) ==
+                                      currentWeek &&
+                                  recordedAt.year == currentYear;
+                            });
+                            hasReadings =
+                                hasPendingThisWeek || hasServerReadingThisWeek;
                           } catch (_) {
                             hasReadings = false;
                           }
-                        } else if (isNewPlant) {
-                          // Brand new plant (queued offline this session) —
-                          // only block if a pending reading already exists for it
-                          final pendingBox = Hive.box('pending_readings');
-                          final pending =
-                              pendingBox.get(
-                                    'readings',
-                                    defaultValue: <dynamic>[],
-                                  )
-                                  as List;
-                          hasReadings = pending.any((r) => r['qrCode'] == code);
                         } else {
-                          // Pre-existing server plant viewed offline —
-                          // we can't reach the server to check real readings,
-                          // so only block if a pending reading was added this session
+                          // Offline — only block if a pending reading exists
+                          // for this plant THIS week
                           final pendingBox = Hive.box('pending_readings');
                           final pending =
                               pendingBox.get(
@@ -1200,7 +1220,18 @@ class _GridMapScreenState extends State<GridMapScreen> {
                                     defaultValue: <dynamic>[],
                                   )
                                   as List;
-                          hasReadings = pending.any((r) => r['qrCode'] == code);
+                          final currentWeek = WeekUtils.currentWeek;
+                          final currentYear = WeekUtils.currentYear;
+                          hasReadings = pending.any((r) {
+                            if (r['qrCode'] != code) return false;
+                            final recordedAt = DateTime.tryParse(
+                              r['recordedAt'] as String? ?? '',
+                            );
+                            if (recordedAt == null) return false;
+                            return WeekUtils.isoWeekNumber(recordedAt) ==
+                                    currentWeek &&
+                                recordedAt.year == currentYear;
+                          });
                         }
                         if (!mounted) return;
 
