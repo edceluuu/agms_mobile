@@ -4,7 +4,6 @@ import 'api_service.dart';
 class SyncService {
   static Future<void> syncAll() async {
     await _syncPendingDeletions();
-    await _syncPendingDeactivations();
     await _syncPendingPlants();
     await _syncPendingReadings();
   }

@@ -258,20 +258,26 @@ class _GridMapScreenState extends State<GridMapScreen> {
       debugPrint('🌿 Plants fetched: ${data.length}');
       _plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
 
-      // Only fetch readings when explicitly requested (after manual sync)
       if (withReadings) {
+        // After sync — fetch readings per plant to determine green pins
         for (int i = 0; i < _plants.length; i++) {
           try {
             final readingsRes = await ApiService.get(
               '/plants/readings/${_plants[i]['id']}',
             );
-            _plants[i] = {..._plants[i], 'readings': readingsRes.data};
+            final List readings = readingsRes.data;
+            _plants[i] = {
+              ..._plants[i],
+              'readings': readings
+                  .map((r) => Map<String, dynamic>.from(r as Map))
+                  .toList(),
+            };
           } catch (_) {
             _plants[i] = {..._plants[i], 'readings': []};
           }
         }
       } else {
-        // Preserve readings from cache if available, so green pins survive reload
+        // Normal load — preserve synced readings from cache so green pins survive
         final cached = _loadPinsFromCache();
         _plants = _plants.map((p) {
           final cachedPlant = cached
@@ -711,11 +717,9 @@ class _GridMapScreenState extends State<GridMapScreen> {
     if (!mounted) return;
 
     // Check connectivity before attempting sync
-    final connectivityBox = Hive.box('connectivity');
-    final isOnline =
-        connectivityBox.get('isOnline', defaultValue: false) as bool;
-
-    if (!isOnline) {
+    try {
+      await ApiService.get('/plants/grid/${widget.gridName}');
+    } catch (_) {
       _showErrorSnackbar('No internet connection. Sync when back online.');
       return;
     }
