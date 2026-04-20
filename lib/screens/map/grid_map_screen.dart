@@ -15,6 +15,7 @@ import 'package:go_router/go_router.dart';
 import '../../services/api_service.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../../main.dart';
+import '../../services/sync_service.dart';
 
 class GridMapScreen extends StatefulWidget {
   final String gridName;
@@ -679,6 +680,88 @@ class _GridMapScreenState extends State<GridMapScreen> {
     }
   }
 
+  Future<void> _manualSync() async {
+    if (!mounted) return;
+
+    // Check connectivity before attempting sync
+    final connectivityBox = Hive.box('connectivity');
+    final isOnline =
+        connectivityBox.get('isOnline', defaultValue: false) as bool;
+
+    if (!isOnline) {
+      _showErrorSnackbar('No internet connection. Sync when back online.');
+      return;
+    }
+
+    // Show loading indicator
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.white,
+        margin: EdgeInsets.all(16),
+        duration: Duration(seconds: 2),
+        content: Row(
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 12),
+            Text(
+              'Syncing...',
+              style: TextStyle(
+                color: Colors.black87,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      await SyncService.syncAll();
+
+      if (!mounted) return;
+
+      // Redraw pins to reflect updated state
+      _annotationPlantMap.clear();
+      _plantAnnotationObjects.clear();
+      await _plantAnnotationManager?.deleteAll();
+      await _loadAndPinPlants(_mapboxMap!);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.white,
+          margin: const EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(color: AppColors.pinGreen.withOpacity(0.4)),
+          ),
+          duration: const Duration(seconds: 3),
+          content: Row(
+            children: [
+              Icon(Icons.cloud_done, color: AppColors.pinGreen, size: 20),
+              const SizedBox(width: 10),
+              const Text(
+                'Sync complete!',
+                style: TextStyle(
+                  color: Colors.black87,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showErrorSnackbar('Sync failed. Check your connection.');
+    }
+  }
+
   Future<void> _recenter() async {
     if (kIsWeb || _mapboxMap == null) return;
     setState(() => _cameraFollowing = true);
@@ -763,7 +846,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
           if (_permissionChecked) ...[
             Positioned(
-              bottom: 260,
+              bottom: 310,
               right: 16,
               child: FloatingActionButton.small(
                 heroTag: 'grid_history',
@@ -778,6 +861,16 @@ class _GridMapScreenState extends State<GridMapScreen> {
                   }
                 },
                 child: const Icon(Icons.history, color: AppColors.primary),
+              ),
+            ),
+            Positioned(
+              bottom: 255,
+              right: 16,
+              child: FloatingActionButton.small(
+                heroTag: 'grid_sync',
+                backgroundColor: AppColors.surface,
+                onPressed: _manualSync,
+                child: const Icon(Icons.cloud_upload, color: AppColors.primary),
               ),
             ),
             Positioned(
