@@ -258,25 +258,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
       debugPrint('⚠️ Offline or error — loading pins from cache: $e');
       _plants = _loadPinsFromCache();
       debugPrint('🌿 Plants from cache: ${_plants.length}');
-
-      // Apply pending deactivations to cached plants
-      final deactivationsBox = Hive.box('pending_deactivations');
-      final List pendingDeactivations = List.from(
-        deactivationsBox.get('plants', defaultValue: <dynamic>[]) as List,
-      );
-      if (pendingDeactivations.isNotEmpty) {
-        _plants = _plants.map((plant) {
-          final plantIdStr = plant['id']?.toString();
-          final isPending =
-              plantIdStr != null &&
-              pendingDeactivations.any((d) => d.toString() == plantIdStr);
-          if (isPending) return {...plant, 'isActive': false};
-          return plant;
-        }).toList();
-        debugPrint(
-          '⚫ Applied ${pendingDeactivations.length} pending deactivation(s) to cached pins',
-        );
-      }
     }
 
     _plantAnnotationManager = await mapboxMap.annotations
@@ -310,29 +291,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
     final hasPending = _hasPendingReading(plant['qrCode'] as String?);
 
-    // Check if this plant is pending deactivation (deactivated offline, not yet synced)
-    final deactivationsBox = Hive.box('pending_deactivations');
-    final List pendingDeactivations = List.from(
-      deactivationsBox.get('plants', defaultValue: <dynamic>[]) as List,
-    );
-    final plantIdStr = plant['id']?.toString();
-    final isPendingDeactivation =
-        plantIdStr != null &&
-        pendingDeactivations.any((d) => d.toString() == plantIdStr);
-
-    final isActive = isPendingDeactivation
-        ? false
-        : (plant['isActive'] as bool? ?? true);
-
-    // Override isActive if pending deactivation
-    final plantForColor = isPendingDeactivation
-        ? {...plant, 'isActive': false}
-        : plant;
-
-    final color = PinColorUtils.pinColor(
-      plantForColor,
-      hasPendingReading: hasPending,
-    );
+    final color = PinColorUtils.pinColor(plant, hasPendingReading: hasPending);
     final paint = Paint()..color = color;
     canvas.drawCircle(const Offset(size / 2, size / 2), 16, paint);
     canvas.drawCircle(
