@@ -115,20 +115,100 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
     }).toList();
   }
 
+  // Adds plants from pending_plants that haven't been synced yet
+  List<Map<String, dynamic>> _mergePendingPlants(
+    List<Map<String, dynamic>> plants,
+  ) {
+    final pendingBox = Hive.box('pending_plants');
+    final List pending = List.from(
+      pendingBox.get('plants', defaultValue: <dynamic>[]) as List,
+    );
+    if (pending.isEmpty) return plants;
+
+    final existingQrCodes = plants.map((p) => p['qrCode']).toSet();
+    final pendingReadingsBox = Hive.box('pending_readings');
+    final List pendingReadings = List.from(
+      pendingReadingsBox.get('readings', defaultValue: <dynamic>[]) as List,
+    );
+
+    for (final p in pending) {
+      final qrCode = p['qrCode'] as String?;
+      if (qrCode == null || existingQrCodes.contains(qrCode)) continue;
+
+      // Attach any pending readings for this plant
+      final readings = pendingReadings
+          .where((r) => r['qrCode'] == qrCode)
+          .map(
+            (r) => {
+              'height': r['height'],
+              'girth': r['girth'],
+              'recordedAt': r['recordedAt'],
+              'weekNumber': WeekUtils.isoWeekNumber(
+                DateTime.parse(r['recordedAt'] as String),
+              ),
+              'year': DateTime.parse(r['recordedAt'] as String).year,
+              'isFlagged': false,
+              'flagReason': null,
+              'user': {'name': 'Pending upload'},
+            },
+          )
+          .toList();
+
+      plants.add({
+        'id': null,
+        'qrCode': qrCode,
+        'gridName': p['gridName'],
+        'areaName': p['areaName'],
+        'latitude': p['latitude'],
+        'longitude': p['longitude'],
+        'readings': readings,
+      });
+    }
+
+    return plants;
+  }
+
   Future<void> _fetchPlants() async {
     try {
-      // Build query string if a specific week is selected
-      String endpoint = '/plants';
-      if (_selectedWeek != null && _selectedYear != null) {
-        endpoint = '/plants?week=$_selectedWeek&year=$_selectedYear';
-      }
-      final response = await ApiService.get(endpoint);
+      // Always fetch ALL plants with ALL readings first
+      final response = await ApiService.get('/plants');
       final List data = response.data;
       var plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
       _saveToCache(plants);
 
-      // Merge any locally pending readings so they appear immediately
+      // Merge pending local readings so they appear before upload
       plants = _mergePendingReadings(plants);
+
+      // Also include plants that only exist in pending_plants (never synced)
+      plants = _mergePendingPlants(plants);
+
+      // Apply week filter locally so pending readings are included in the filter
+      if (_selectedWeek != null && _selectedYear != null) {
+        plants = plants.where((plant) {
+          final readings = (plant['readings'] as List?) ?? [];
+          return readings.any((r) {
+            final recordedAt = DateTime.tryParse(
+              r['recordedAt'] as String? ?? '',
+            );
+            if (recordedAt == null) return false;
+            return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
+                recordedAt.year == _selectedYear;
+          });
+        }).toList();
+
+        plants = plants.map((plant) {
+          final readings = (plant['readings'] as List?) ?? [];
+          final weekReadings = readings.where((r) {
+            final recordedAt = DateTime.tryParse(
+              r['recordedAt'] as String? ?? '',
+            );
+            if (recordedAt == null) return false;
+            return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
+                recordedAt.year == _selectedYear;
+          }).toList();
+          return {...plant, 'readings': weekReadings};
+        }).toList();
+      }
 
       setState(() {
         _plants = plants;
