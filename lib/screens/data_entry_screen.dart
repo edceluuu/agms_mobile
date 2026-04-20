@@ -147,12 +147,12 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: Colors.orange,
+        backgroundColor: AppColors.pinBlue,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         margin: const EdgeInsets.all(16),
         content: const Row(
           children: [
-            Icon(Icons.cloud_off, color: Colors.white, size: 20),
+            Icon(Icons.save, color: Colors.white, size: 20),
             SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -160,7 +160,7 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Saved offline',
+                    'Reading saved locally',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -168,7 +168,7 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
                     ),
                   ),
                   Text(
-                    'Will sync when back online.',
+                    'Tap Upload to sync to server.',
                     style: TextStyle(color: Colors.white70, fontSize: 12),
                   ),
                 ],
@@ -243,70 +243,8 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
       return;
     }
 
-    // Online and plantId is known — post to server
-    try {
-      await ApiService.post(
-        '/plants/readings',
-        data: {
-          'plantId': _plantId,
-          'height': _heightInMeters,
-          'girth': _girthInMeters,
-        },
-      );
-
-      setState(() => _isSubmitting = false);
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: AppColors.pinGreen,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-          margin: const EdgeInsets.all(16),
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white, size: 20),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Reading saved!',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                    ),
-                    Text(
-                      '${widget.qrCode} · H: ${_heightInMeters.toStringAsFixed(2)}m · G: ${_girthInMeters.toStringAsFixed(2)}m',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          duration: const Duration(seconds: 3),
-        ),
-      );
-
-      if (mounted) context.pop({'plantId': _plantId, 'qrCode': widget.qrCode});
-    } catch (e) {
-      debugPrint('❌ createReading failed: $e');
-      setState(() => _isSubmitting = false);
-
-      // API call failed despite being online (server error, timeout, etc.)
-      // Save offline and let sync handle it
-      await _saveOffline();
-    }
+    // Always save locally first — pin will show blue until upload is clicked
+    await _saveOffline();
   }
 
   // ---------------------------------------------------------------------------
