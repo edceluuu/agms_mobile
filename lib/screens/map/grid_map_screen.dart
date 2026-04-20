@@ -107,7 +107,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
     _annotationPlantMap.clear();
     _plantAnnotationObjects.clear();
     await _plantAnnotationManager?.deleteAll();
-    await _loadAndPinPlants(_mapboxMap!);
+    await _loadAndPinPlants(_mapboxMap!, withReadings: true);
   }
 
   void _startCompassStream() {
@@ -248,12 +248,39 @@ class _GridMapScreenState extends State<GridMapScreen> {
         .toList();
   }
 
-  Future<void> _loadAndPinPlants(MapboxMap mapboxMap) async {
+  Future<void> _loadAndPinPlants(
+    MapboxMap mapboxMap, {
+    bool withReadings = false,
+  }) async {
     try {
       final response = await ApiService.get('/plants/grid/${widget.gridName}');
       final List data = response.data;
       debugPrint('🌿 Plants fetched: ${data.length}');
       _plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
+
+      // Only fetch readings when explicitly requested (after manual sync)
+      if (withReadings) {
+        for (int i = 0; i < _plants.length; i++) {
+          try {
+            final readingsRes = await ApiService.get(
+              '/plants/readings/${_plants[i]['id']}',
+            );
+            _plants[i] = {..._plants[i], 'readings': readingsRes.data};
+          } catch (_) {
+            _plants[i] = {..._plants[i], 'readings': []};
+          }
+        }
+      } else {
+        // Preserve readings from cache if available, so green pins survive reload
+        final cached = _loadPinsFromCache();
+        _plants = _plants.map((p) {
+          final cachedPlant = cached
+              .where((c) => c['id'] == p['id'])
+              .firstOrNull;
+          return {...p, 'readings': cachedPlant?['readings'] ?? []};
+        }).toList();
+      }
+
       _savePinsToCache(_plants);
     } catch (e) {
       debugPrint('⚠️ Offline or error — loading pins from cache: $e');
@@ -725,11 +752,11 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
       if (!mounted) return;
 
-      // Redraw pins to reflect updated state
+      // Redraw pins with readings to reflect green state after sync
       _annotationPlantMap.clear();
       _plantAnnotationObjects.clear();
       await _plantAnnotationManager?.deleteAll();
-      await _loadAndPinPlants(_mapboxMap!);
+      await _loadAndPinPlants(_mapboxMap!, withReadings: true);
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
