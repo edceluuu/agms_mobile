@@ -217,8 +217,9 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
     } catch (e) {
       var cached = _loadFromCache();
 
-      // Merge pending readings into cached plants too
+      // Merge pending readings and pending plants so offline additions appear
       cached = _mergePendingReadings(cached);
+      cached = _mergePendingPlants(cached);
 
       // Apply week filter locally when offline
       List<Map<String, dynamic>> filtered = cached;

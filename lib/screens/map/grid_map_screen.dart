@@ -293,6 +293,27 @@ class _GridMapScreenState extends State<GridMapScreen> {
       debugPrint('⚠️ Offline or error — loading pins from cache: $e');
       _plants = _loadPinsFromCache();
       debugPrint('🌿 Plants from cache: ${_plants.length}');
+
+      // Merge pending_plants so brand new offline plants appear on the map
+      final pendingPlantsBox = Hive.box('pending_plants');
+      final List pendingPlants = List.from(
+        pendingPlantsBox.get('plants', defaultValue: <dynamic>[]) as List,
+      );
+      final existingQrCodes = _plants.map((p) => p['qrCode']).toSet();
+      for (final p in pendingPlants) {
+        final qrCode = p['qrCode'] as String?;
+        if (qrCode == null || existingQrCodes.contains(qrCode)) continue;
+        _plants.add({
+          'id': null,
+          'qrCode': qrCode,
+          'latitude': p['latitude'],
+          'longitude': p['longitude'],
+          'gridName': p['gridName'],
+          'areaName': p['areaName'],
+          'readings': [],
+        });
+      }
+      debugPrint('🌿 Plants after merging pending: ${_plants.length}');
     }
 
     _plantAnnotationManager = await mapboxMap.annotations
