@@ -294,6 +294,11 @@ class _GridMapScreenState extends State<GridMapScreen> {
       _plants = _loadPinsFromCache();
       debugPrint('🌿 Plants from cache: ${_plants.length}');
 
+      // Strip readings from cached plants — pin color is determined by
+      // _hasPendingReading (blue) or server-confirmed readings (green).
+      // Without server confirmation offline, all non-pending pins stay gray.
+      _plants = _plants.map((p) => {...p, 'readings': []}).toList();
+
       // Merge pending_plants so brand new offline plants appear on the map
       final pendingPlantsBox = Hive.box('pending_plants');
       final List pendingPlants = List.from(
@@ -335,7 +340,15 @@ class _GridMapScreenState extends State<GridMapScreen> {
     if (qrCode == null) return false;
     final box = Hive.box('pending_readings');
     final pending = box.get('readings', defaultValue: <dynamic>[]) as List;
-    return pending.any((r) => r['qrCode'] == qrCode);
+    final currentWeek = WeekUtils.currentWeek;
+    final currentYear = WeekUtils.currentYear;
+    return pending.any((r) {
+      if (r['qrCode'] != qrCode) return false;
+      final recordedAt = DateTime.tryParse(r['recordedAt'] as String? ?? '');
+      if (recordedAt == null) return false;
+      return WeekUtils.isoWeekNumber(recordedAt) == currentWeek &&
+          recordedAt.year == currentYear;
+    });
   }
 
   Future<void> _addPlantPin(Map<String, dynamic> plant) async {
