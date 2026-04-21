@@ -68,7 +68,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
   StreamSubscription<CompassEvent>? _compassStream;
 
   bool _cameraFollowing = true;
-  Timer? _pinRefreshTimer;
+  bool _isOnline = true;
 
   List<Map<String, dynamic>> _plants = [];
   PointAnnotationManager? _plantAnnotationManager;
@@ -93,22 +93,22 @@ class _GridMapScreenState extends State<GridMapScreen> {
     }
     // Redraw pins whenever a sync completes
     syncCompleteNotifier.addListener(_onSyncComplete);
+    _checkConnectivity();
+  }
 
-    // Auto-refresh pins every 60 seconds to reflect DB changes
-    _pinRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
-      if (!mounted || _mapboxMap == null) return;
-      _annotationPlantMap.clear();
-      _plantAnnotationObjects.clear();
-      await _plantAnnotationManager?.deleteAll();
-      await _loadAndPinPlants(_mapboxMap!, withReadings: true);
-    });
+  Future<void> _checkConnectivity() async {
+    try {
+      await ApiService.get('/plants/grid/${widget.gridName}');
+      if (mounted) setState(() => _isOnline = true);
+    } catch (_) {
+      if (mounted) setState(() => _isOnline = false);
+    }
   }
 
   @override
   void dispose() {
     _positionStream?.cancel();
     _compassStream?.cancel();
-    _pinRefreshTimer?.cancel();
     syncCompleteNotifier.removeListener(_onSyncComplete);
     super.dispose();
   }
@@ -1009,6 +1009,23 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
           if (_permissionChecked) ...[
             Positioned(
+              bottom: 420,
+              right: 16,
+              child: FloatingActionButton.small(
+                heroTag: 'grid_refresh',
+                backgroundColor: AppColors.surface,
+                onPressed: () async {
+                  if (!mounted || _mapboxMap == null) return;
+                  await _checkConnectivity();
+                  _annotationPlantMap.clear();
+                  _plantAnnotationObjects.clear();
+                  await _plantAnnotationManager?.deleteAll();
+                  await _loadAndPinPlants(_mapboxMap!, withReadings: true);
+                },
+                child: const Icon(Icons.refresh, color: AppColors.primary),
+              ),
+            ),
+            Positioned(
               bottom: 365,
               right: 16,
               child: FloatingActionButton.small(
@@ -1041,9 +1058,16 @@ class _GridMapScreenState extends State<GridMapScreen> {
               right: 16,
               child: FloatingActionButton.small(
                 heroTag: 'grid_sync',
-                backgroundColor: AppColors.surface,
-                onPressed: _manualSync,
-                child: const Icon(Icons.cloud_upload, color: AppColors.primary),
+                backgroundColor: _isOnline
+                    ? AppColors.surface
+                    : AppColors.surface.withOpacity(0.4),
+                onPressed: _isOnline ? _manualSync : null,
+                child: Icon(
+                  Icons.cloud_upload,
+                  color: _isOnline
+                      ? AppColors.primary
+                      : AppColors.primary.withOpacity(0.3),
+                ),
               ),
             ),
             Positioned(
