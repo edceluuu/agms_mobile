@@ -104,11 +104,12 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
   Future<void> _onSyncComplete() async {
     if (!mounted || _mapboxMap == null) return;
-    debugPrint('🔄 Sync complete — redrawing pins');
     _annotationPlantMap.clear();
     _plantAnnotationObjects.clear();
     await _plantAnnotationManager?.deleteAll();
-    await _loadAndPinPlants(_mapboxMap!, withReadings: true);
+    // Do NOT pass withReadings: true here — pins should only turn green
+    // when the user manually clicks the Upload button
+    await _loadAndPinPlants(_mapboxMap!);
   }
 
   void _startCompassStream() {
@@ -256,7 +257,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
     try {
       final response = await ApiService.get('/plants/grid/${widget.gridName}');
       final List data = response.data;
-      debugPrint('🌿 Plants fetched: ${data.length}');
       _plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
 
       if (withReadings) {
@@ -273,31 +273,55 @@ class _GridMapScreenState extends State<GridMapScreen> {
                   .map((r) => Map<String, dynamic>.from(r as Map))
                   .toList(),
             };
-          } catch (_) {
+          } catch (e) {
+            debugPrint(
+              '🔄 Failed to fetch readings for ${_plants[i]['qrCode']}: $e',
+            );
             _plants[i] = {..._plants[i], 'readings': []};
           }
         }
       } else {
-        // Normal load — preserve synced readings from cache so green pins survive
+        // Normal load — preserve synced readings from cache so green pins
+        // stay green offline and after reconnecting without re-uploading
         final cached = _loadPinsFromCache();
         _plants = _plants.map((p) {
           final cachedPlant = cached
-              .where((c) => c['id'] == p['id'])
+              .where((c) => c['id'] != null && c['id'] == p['id'])
               .firstOrNull;
-          return {...p, 'readings': cachedPlant?['readings'] ?? []};
+          final cachedReadings = cachedPlant?['readings'];
+          return {
+            ...p,
+            'readings': (cachedReadings is List && cachedReadings.isNotEmpty)
+                ? cachedReadings
+                : [],
+          };
         }).toList();
+      }
+
+      // Always merge pending_plants into the online result too —
+      // new plants added offline may not be on the server yet
+      final pendingPlantsBox = Hive.box('pending_plants');
+      final List pendingPlants = List.from(
+        pendingPlantsBox.get('plants', defaultValue: <dynamic>[]) as List,
+      );
+      final existingQrCodes = _plants.map((p) => p['qrCode']).toSet();
+      for (final p in pendingPlants) {
+        final qrCode = p['qrCode'] as String?;
+        if (qrCode == null || existingQrCodes.contains(qrCode)) continue;
+        _plants.add({
+          'id': null,
+          'qrCode': qrCode,
+          'latitude': p['latitude'],
+          'longitude': p['longitude'],
+          'gridName': p['gridName'],
+          'areaName': p['areaName'],
+          'readings': [],
+        });
       }
 
       _savePinsToCache(_plants);
     } catch (e) {
-      debugPrint('⚠️ Offline or error — loading pins from cache: $e');
       _plants = _loadPinsFromCache();
-      debugPrint('🌿 Plants from cache: ${_plants.length}');
-
-      // Strip readings from cached plants — pin color is determined by
-      // _hasPendingReading (blue) or server-confirmed readings (green).
-      // Without server confirmation offline, all non-pending pins stay gray.
-      _plants = _plants.map((p) => {...p, 'readings': []}).toList();
 
       // Merge pending_plants so brand new offline plants appear on the map
       final pendingPlantsBox = Hive.box('pending_plants');
@@ -318,7 +342,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
           'readings': [],
         });
       }
-      debugPrint('🌿 Plants after merging pending: ${_plants.length}');
     }
 
     _plantAnnotationManager = await mapboxMap.annotations
@@ -342,13 +365,17 @@ class _GridMapScreenState extends State<GridMapScreen> {
     final pending = box.get('readings', defaultValue: <dynamic>[]) as List;
     final currentWeek = WeekUtils.currentWeek;
     final currentYear = WeekUtils.currentYear;
-    return pending.any((r) {
-      if (r['qrCode'] != qrCode) return false;
+    for (final r in pending) {
+      final rCode = r['qrCode']?.toString();
+      if (rCode != qrCode) continue;
       final recordedAt = DateTime.tryParse(r['recordedAt'] as String? ?? '');
-      if (recordedAt == null) return false;
-      return WeekUtils.isoWeekNumber(recordedAt) == currentWeek &&
-          recordedAt.year == currentYear;
-    });
+      if (recordedAt == null) continue;
+      if (WeekUtils.isoWeekNumber(recordedAt) == currentWeek &&
+          recordedAt.year == currentYear) {
+        return true;
+      }
+    }
+    return false;
   }
 
   Future<void> _addPlantPin(Map<String, dynamic> plant) async {
@@ -359,8 +386,8 @@ class _GridMapScreenState extends State<GridMapScreen> {
     const size = 48.0;
 
     final hasPending = _hasPendingReading(plant['qrCode'] as String?);
-
     final color = PinColorUtils.pinColor(plant, hasPendingReading: hasPending);
+
     final paint = Paint()..color = color;
     canvas.drawCircle(const Offset(size / 2, size / 2), 16, paint);
     canvas.drawCircle(
@@ -748,43 +775,102 @@ class _GridMapScreenState extends State<GridMapScreen> {
     }
   }
 
+  void _showLegendSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Pin Legend',
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 16),
+              _legendRow(
+                AppColors.pinBlue,
+                'Blue',
+                'Has reading or new sample — stored locally first',
+              ),
+              const SizedBox(height: 12),
+              _legendRow(
+                AppColors.pinGray,
+                'Gray',
+                'Existing sample — no reading yet this week',
+              ),
+              const SizedBox(height: 12),
+              _legendRow(
+                AppColors.pinGreen,
+                'Green',
+                'Reading uploaded to server',
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _legendRow(Color color, String label, String description) {
+    return Row(
+      children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: color.withOpacity(0.4),
+                blurRadius: 4,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                description,
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Future<void> _manualSync() async {
     if (!mounted) return;
-
-    // Check connectivity before attempting sync
-    try {
-      await ApiService.get('/plants/grid/${widget.gridName}');
-    } catch (_) {
-      _showErrorSnackbar('No internet connection. Sync when back online.');
-      return;
-    }
-
-    // Show loading indicator
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: Colors.white,
-        margin: EdgeInsets.all(16),
-        duration: Duration(seconds: 2),
-        content: Row(
-          children: [
-            SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            SizedBox(width: 12),
-            Text(
-              'Syncing...',
-              style: TextStyle(
-                color: Colors.black87,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
 
     try {
       await SyncService.syncAll();
@@ -806,7 +892,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
             borderRadius: BorderRadius.circular(10),
             side: BorderSide(color: AppColors.pinGreen.withOpacity(0.4)),
           ),
-          duration: const Duration(seconds: 3),
+          duration: const Duration(seconds: 6),
           content: Row(
             children: [
               Icon(Icons.cloud_done, color: AppColors.pinGreen, size: 20),
@@ -824,7 +910,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      _showErrorSnackbar('Sync failed. Check your connection.');
+      _showErrorSnackbar('Sync failed: ${e.toString().substring(0, 50)}');
     }
   }
 
@@ -911,6 +997,16 @@ class _GridMapScreenState extends State<GridMapScreen> {
             _buildMap(),
 
           if (_permissionChecked) ...[
+            Positioned(
+              bottom: 365,
+              right: 16,
+              child: FloatingActionButton.small(
+                heroTag: 'grid_legend',
+                backgroundColor: AppColors.surface,
+                onPressed: _showLegendSheet,
+                child: const Icon(Icons.info_outline, color: AppColors.primary),
+              ),
+            ),
             Positioned(
               bottom: 310,
               right: 16,
@@ -1027,38 +1123,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
                         bool isOffline = false;
                         bool isNewPlant = false;
 
-                        // 🔍 DEBUG — check what's in each Hive box before anything runs
-                        final debugCache = _loadPinsFromCache();
-                        debugPrint(
-                          '🔍 plant_pins cache count: ${debugCache.length}',
-                        );
-                        for (final p in debugCache) {
-                          debugPrint('🔍 cached pin: ${p['qrCode']}');
-                        }
-                        final debugPendingPlants =
-                            Hive.box(
-                                  'pending_plants',
-                                ).get('plants', defaultValue: <dynamic>[])
-                                as List;
-                        debugPrint(
-                          '🔍 pending_plants count: ${debugPendingPlants.length}',
-                        );
-                        for (final p in debugPendingPlants) {
-                          debugPrint('🔍 pending plant: ${p['qrCode']}');
-                        }
-                        final debugPendingReadings =
-                            Hive.box(
-                                  'pending_readings',
-                                ).get('readings', defaultValue: <dynamic>[])
-                                as List;
-                        debugPrint(
-                          '🔍 pending_readings count: ${debugPendingReadings.length}',
-                        );
-                        for (final r in debugPendingReadings) {
-                          debugPrint('🔍 pending reading: ${r['qrCode']}');
-                        }
-                        debugPrint('🔍 scanned QR code: $code');
-
                         // Step 1: Try API, fall back to cache
                         try {
                           final res = await ApiService.get('/plants/$code');
@@ -1123,9 +1187,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
                                   },
                                 );
                                 if (!mounted) return;
-                                debugPrint(
-                                  '🆔 New plant ID from server: ${createRes.data['id']}',
-                                );
                                 final newPlant = {
                                   'id': createRes.data['id'],
                                   'qrCode': code,
@@ -1185,68 +1246,12 @@ class _GridMapScreenState extends State<GridMapScreen> {
                         final plantId = existingPlant['id'];
                         bool hasReadings = false;
 
-                        final debugPendingBox = Hive.box('pending_readings');
-                        final debugPending =
-                            debugPendingBox.get(
-                                  'readings',
-                                  defaultValue: <dynamic>[],
-                                )
-                                as List;
-                        debugPrint('🔍 isOffline: $isOffline');
-                        debugPrint('🔍 isNewPlant: $isNewPlant');
-                        debugPrint('🔍 code: $code');
-                        debugPrint(
-                          '🔍 pending_readings count: ${debugPending.length}',
-                        );
-                        for (final r in debugPending) {
-                          debugPrint('🔍 pending reading: ${r}');
-                        }
-
                         if (!isOffline) {
-                          // Online — only block if a reading exists THIS week
-                          try {
-                            final readingsRes = await ApiService.get(
-                              '/plants/readings/$plantId',
-                            );
-                            final List readings = readingsRes.data;
-                            final currentWeek = WeekUtils.currentWeek;
-                            final currentYear = WeekUtils.currentYear;
-                            // Check pending_readings for this week too
-                            final pendingBox = Hive.box('pending_readings');
-                            final pending =
-                                pendingBox.get(
-                                      'readings',
-                                      defaultValue: <dynamic>[],
-                                    )
-                                    as List;
-                            final hasPendingThisWeek = pending.any((r) {
-                              if (r['qrCode'] != code) return false;
-                              final recordedAt = DateTime.tryParse(
-                                r['recordedAt'] as String? ?? '',
-                              );
-                              if (recordedAt == null) return false;
-                              return WeekUtils.isoWeekNumber(recordedAt) ==
-                                      currentWeek &&
-                                  recordedAt.year == currentYear;
-                            });
-                            final hasServerReadingThisWeek = readings.any((r) {
-                              final map = Map<String, dynamic>.from(r as Map);
-                              final recordedAt = DateTime.tryParse(
-                                map['recordedAt'] as String? ?? '',
-                              );
-                              if (recordedAt == null) return false;
-                              return WeekUtils.isoWeekNumber(recordedAt) ==
-                                      currentWeek &&
-                                  recordedAt.year == currentYear;
-                            });
-                            hasReadings =
-                                hasPendingThisWeek || hasServerReadingThisWeek;
-                          } catch (_) {
-                            hasReadings = false;
-                          }
-                        } else {
-                          // Offline — only block if a pending reading exists
-                          // for this plant THIS week
+                          final currentWeek = WeekUtils.currentWeek;
+                          final currentYear = WeekUtils.currentYear;
+
+                          // Always check pending_readings first (works for
+                          // both new and existing plants this week)
                           final pendingBox = Hive.box('pending_readings');
                           final pending =
                               pendingBox.get(
@@ -1254,9 +1259,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
                                     defaultValue: <dynamic>[],
                                   )
                                   as List;
-                          final currentWeek = WeekUtils.currentWeek;
-                          final currentYear = WeekUtils.currentYear;
-                          hasReadings = pending.any((r) {
+                          final hasPendingThisWeek = pending.any((r) {
                             if (r['qrCode'] != code) return false;
                             final recordedAt = DateTime.tryParse(
                               r['recordedAt'] as String? ?? '',
@@ -1266,6 +1269,82 @@ class _GridMapScreenState extends State<GridMapScreen> {
                                     currentWeek &&
                                 recordedAt.year == currentYear;
                           });
+
+                          if (hasPendingThisWeek) {
+                            // Already has a local pending reading this week
+                            hasReadings = true;
+                          } else if (plantId != null) {
+                            // Only check server if plant has a real server ID
+                            try {
+                              final readingsRes = await ApiService.get(
+                                '/plants/readings/$plantId',
+                              );
+                              final List readings = readingsRes.data;
+                              hasReadings = readings.any((r) {
+                                final map = Map<String, dynamic>.from(r as Map);
+                                final recordedAt = DateTime.tryParse(
+                                  map['recordedAt'] as String? ?? '',
+                                );
+                                if (recordedAt == null) return false;
+                                return WeekUtils.isoWeekNumber(recordedAt) ==
+                                        currentWeek &&
+                                    recordedAt.year == currentYear;
+                              });
+                            } catch (_) {
+                              hasReadings = false;
+                            }
+                          } else {
+                            // plantId is null — brand new plant not yet synced
+                            // pending check above already covered this case
+                            hasReadings = false;
+                          }
+                        } else {
+                          // Offline — check both pending_readings AND
+                          // cached server readings for this week
+                          final currentWeek = WeekUtils.currentWeek;
+                          final currentYear = WeekUtils.currentYear;
+
+                          // Check pending_readings (blue pin readings)
+                          final pendingBox = Hive.box('pending_readings');
+                          final pending =
+                              pendingBox.get(
+                                    'readings',
+                                    defaultValue: <dynamic>[],
+                                  )
+                                  as List;
+                          final hasPendingThisWeek = pending.any((r) {
+                            if (r['qrCode'] != code) return false;
+                            final recordedAt = DateTime.tryParse(
+                              r['recordedAt'] as String? ?? '',
+                            );
+                            if (recordedAt == null) return false;
+                            return WeekUtils.isoWeekNumber(recordedAt) ==
+                                    currentWeek &&
+                                recordedAt.year == currentYear;
+                          });
+
+                          // Check cached server readings (green pin readings)
+                          final cachedPlants = _loadPinsFromCache();
+                          final cachedPlant = cachedPlants
+                              .where((p) => p['qrCode'] == code)
+                              .firstOrNull;
+                          final cachedReadings =
+                              (cachedPlant?['readings'] as List?) ?? [];
+                          final hasCachedReadingThisWeek = cachedReadings.any((
+                            r,
+                          ) {
+                            final map = Map<String, dynamic>.from(r as Map);
+                            final recordedAt = DateTime.tryParse(
+                              map['recordedAt'] as String? ?? '',
+                            );
+                            if (recordedAt == null) return false;
+                            return WeekUtils.isoWeekNumber(recordedAt) ==
+                                    currentWeek &&
+                                recordedAt.year == currentYear;
+                          });
+
+                          hasReadings =
+                              hasPendingThisWeek || hasCachedReadingThisWeek;
                         }
                         if (!mounted) return;
 
@@ -1323,6 +1402,8 @@ class _GridMapScreenState extends State<GridMapScreen> {
                           _annotationPlantMap.clear();
                           _plantAnnotationObjects.clear();
                           await _plantAnnotationManager?.deleteAll();
+                          // Always reload without readings after data entry —
+                          // pin stays blue until user clicks Upload manually
                           await _loadAndPinPlants(_mapboxMap!);
                         }
                       },

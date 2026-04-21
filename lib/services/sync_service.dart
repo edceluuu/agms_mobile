@@ -1,29 +1,18 @@
+import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'api_service.dart';
 
 class SyncService {
   static Future<void> syncAll() async {
+    final pendingReadings =
+        Hive.box('pending_readings').get('readings', defaultValue: <dynamic>[])
+            as List;
+    final pendingPlants =
+        Hive.box('pending_plants').get('plants', defaultValue: <dynamic>[])
+            as List;
     await _syncPendingDeletions();
     await _syncPendingPlants();
     await _syncPendingReadings();
-  }
-
-  static Future<void> _syncPendingDeactivations() async {
-    final box = Hive.box('pending_deactivations');
-    final List pending = List.from(
-      box.get('plants', defaultValue: <dynamic>[]) as List,
-    );
-    if (pending.isEmpty) return;
-
-    final List failed = [];
-    for (final plantId in pending) {
-      try {
-        await ApiService.patch('/plants/$plantId/deactivate', data: {});
-      } catch (_) {
-        failed.add(plantId);
-      }
-    }
-    await box.put('plants', failed);
   }
 
   static Future<void> _syncPendingDeletions() async {
@@ -114,10 +103,20 @@ class SyncService {
 
     final List failed = [];
     for (final reading in pending) {
-      final plantId = reading['plantId'];
+      var plantId = reading['plantId'];
+      final qrCode = reading['qrCode'];
 
-      // Skip readings that still have no plantId — their parent plant
-      // failed to sync this cycle and will be retried next time
+      // If plantId is null, try to resolve it from qrCode
+      if (plantId == null && qrCode != null) {
+        try {
+          final response = await ApiService.get('/plants/$qrCode');
+          plantId = response.data['id'];
+        } catch (e) {
+          failed.add(reading);
+          continue;
+        }
+      }
+
       if (plantId == null) {
         failed.add(reading);
         continue;
@@ -132,8 +131,19 @@ class SyncService {
             'girth': reading['girth'],
           },
         );
-      } catch (_) {
-        failed.add(reading);
+        // Do NOT add to failed — reading posted successfully, remove from Hive
+      } catch (e) {
+        final errStr = e.toString();
+        // If server says already recorded or conflict, treat as success
+        // so we don't retry it forever
+        if (errStr.contains('400') ||
+            errStr.contains('409') ||
+            errStr.contains('already')) {
+          // already synced — removing from pending
+        } else {
+          // Genuine failure (network, 500, etc.) — retry next time
+          failed.add(reading);
+        }
       }
     }
     await box.put('readings', failed);

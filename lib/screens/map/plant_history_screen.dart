@@ -16,10 +16,9 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
   bool _loading = true;
   String? _error;
 
-  // Week filter state
-  // null means "All Weeks"
-  int? _selectedWeek;
-  int? _selectedYear;
+  // Week filter state — defaults to current week
+  int? _selectedWeek = WeekUtils.currentWeek;
+  int? _selectedYear = WeekUtils.currentYear;
   List<Map<String, dynamic>> _availableWeeks = []; // [{week, year, label}]
 
   @override
@@ -259,106 +258,6 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
     }
   }
 
-  Future<void> _deactivatePlant(String plantId) async {
-    // Get plant details before updating state
-    final plant = _plants.firstWhere(
-      (p) => p['id'] == plantId,
-      orElse: () => {},
-    );
-    final gridName = plant['gridName'] as String?;
-    final qrCode = plant['qrCode'] as String?;
-
-    // Optimistic UI update
-    setState(() {
-      final idx = _plants.indexWhere((p) => p['id'] == plantId);
-      if (idx != -1) _plants[idx]['isActive'] = false;
-    });
-    _saveToCache(_plants);
-
-    // Also update plant_pins cache so the map shows gray immediately
-    if (gridName != null && qrCode != null) {
-      final pinsBox = Hive.box('plant_pins');
-      final cacheKey = 'pins_$gridName';
-      final rawPins = pinsBox.get(cacheKey, defaultValue: <dynamic>[]) as List;
-      final updatedPins = rawPins.map((e) {
-        final pin = Map<String, dynamic>.from(e as Map);
-        if (pin['qrCode'] == qrCode) {
-          return {...pin, 'isActive': false};
-        }
-        return pin;
-      }).toList();
-      await pinsBox.put(cacheKey, updatedPins);
-    }
-
-    try {
-      await ApiService.patch('/plants/$plantId/deactivate', data: {});
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: Colors.orange,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            margin: const EdgeInsets.all(16),
-            content: const Row(
-              children: [
-                Icon(Icons.block, color: Colors.white, size: 20),
-                SizedBox(width: 10),
-                Text(
-                  'Plant deactivated.',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
-    } catch (_) {
-      final box = Hive.box('pending_deactivations');
-      final List pending = List.from(
-        box.get('plants', defaultValue: <dynamic>[]) as List,
-      );
-      if (!pending.contains(plantId)) {
-        pending.add(plantId);
-        await box.put('plants', pending);
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: Colors.orange,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            margin: const EdgeInsets.all(16),
-            content: const Row(
-              children: [
-                Icon(Icons.cloud_off, color: Colors.white, size: 20),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Deactivated offline — will sync when back online.',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            duration: const Duration(seconds: 3),
-          ),
-        );
-      }
-    }
-  }
-
   Future<void> _deletePlant(String plantId) async {
     // Grab qrCode and gridName before removing from _plants
     final plant = _plants.firstWhere(
@@ -535,20 +434,13 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
                     color: AppColors.primary,
                     size: 16,
                   ),
-                  value: _selectedWeek == null
-                      ? 'all'
-                      : '${_selectedWeek}_${_selectedYear}',
+                  value: '${_selectedWeek}_${_selectedYear}',
                   style: const TextStyle(
                     color: AppColors.primary,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
                   items: [
-                    // "All Weeks" option
-                    const DropdownMenuItem(
-                      value: 'all',
-                      child: Text('All Weeks'),
-                    ),
                     // One item per week
                     ..._availableWeeks.map((w) {
                       final key = '${w['week']}_${w['year']}';
@@ -559,20 +451,12 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
                     }),
                   ],
                   onChanged: (val) {
-                    if (val == 'all') {
-                      setState(() {
-                        _selectedWeek = null;
-                        _selectedYear = null;
-                        _loading = true;
-                      });
-                    } else {
-                      final parts = val!.split('_');
-                      setState(() {
-                        _selectedWeek = int.parse(parts[0]);
-                        _selectedYear = int.parse(parts[1]);
-                        _loading = true;
-                      });
-                    }
+                    final parts = val!.split('_');
+                    setState(() {
+                      _selectedWeek = int.parse(parts[0]);
+                      _selectedYear = int.parse(parts[1]);
+                      _loading = true;
+                    });
                     _fetchPlants();
                   },
                 ),
@@ -610,7 +494,6 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
                       .toList(),
                   formatDate: _formatDate,
                   onDelete: () => _deletePlant(plant['id']),
-                  onDeactivate: () => _deactivatePlant(plant['id']),
                 );
               },
             ),
@@ -623,14 +506,12 @@ class _PlantCard extends StatefulWidget {
   final List<Map<String, dynamic>> readings;
   final String Function(String) formatDate;
   final VoidCallback onDelete;
-  final VoidCallback onDeactivate;
 
   const _PlantCard({
     required this.plant,
     required this.readings,
     required this.formatDate,
     required this.onDelete,
-    required this.onDeactivate,
   });
 
   @override
@@ -695,39 +576,6 @@ class _PlantCardState extends State<_PlantCard> {
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () async {
-                        final confirm = await showDialog<bool>(
-                          context: context,
-                          builder: (ctx) => AlertDialog(
-                            title: const Text('Deactivate Plant'),
-                            content: const Text(
-                              'Mark this plant as decommissioned? It will appear gray on the map.',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, false),
-                                child: const Text('Cancel'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, true),
-                                child: const Text(
-                                  'Deactivate',
-                                  style: TextStyle(color: Colors.orange),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (confirm == true) widget.onDeactivate();
-                      },
-                      child: const Icon(
-                        Icons.block,
-                        color: Colors.orange,
-                        size: 20,
                       ),
                     ),
                     const SizedBox(width: 8),

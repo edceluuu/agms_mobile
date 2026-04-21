@@ -23,15 +23,15 @@ void main() async {
   ApiService.init();
   debugPrint('🔵 BASE_URL: ${dotenv.env['BASE_URL']}');
 
-  // Sync any pending offline data whenever connectivity is restored
+  // When connectivity is restored, just redraw the map pins.
+  // Do NOT auto-sync — the user must manually click Upload to sync.
   bool wasOffline = false;
   Connectivity().onConnectivityChanged.listen((result) {
     final isOnline = result != ConnectivityResult.none;
     if (isOnline && wasOffline) {
-      SyncService.syncAll().then((_) {
-        // Notify the map to redraw pins after sync completes
-        syncCompleteNotifier.value = !syncCompleteNotifier.value;
-      });
+      // Just notify the map to redraw — pending readings stay in Hive
+      // until the user explicitly taps the Upload button
+      syncCompleteNotifier.value = !syncCompleteNotifier.value;
     }
     wasOffline = !isOnline;
   });
