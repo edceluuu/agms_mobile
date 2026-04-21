@@ -186,8 +186,14 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
         plants = plants.where((plant) {
           final readings = (plant['readings'] as List?) ?? [];
           return readings.any((r) {
+            final map = Map<String, dynamic>.from(r as Map);
+            final weekNumber = map['weekNumber'] as int?;
+            final year = map['year'] as int?;
+            if (weekNumber != null && year != null) {
+              return weekNumber == _selectedWeek && year == _selectedYear;
+            }
             final recordedAt = DateTime.tryParse(
-              r['recordedAt'] as String? ?? '',
+              map['recordedAt'] as String? ?? '',
             );
             if (recordedAt == null) return false;
             return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
@@ -198,8 +204,14 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
         plants = plants.map((plant) {
           final readings = (plant['readings'] as List?) ?? [];
           final weekReadings = readings.where((r) {
+            final map = Map<String, dynamic>.from(r as Map);
+            final weekNumber = map['weekNumber'] as int?;
+            final year = map['year'] as int?;
+            if (weekNumber != null && year != null) {
+              return weekNumber == _selectedWeek && year == _selectedYear;
+            }
             final recordedAt = DateTime.tryParse(
-              r['recordedAt'] as String? ?? '',
+              map['recordedAt'] as String? ?? '',
             );
             if (recordedAt == null) return false;
             return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
@@ -226,8 +238,14 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
         filtered = cached.where((plant) {
           final readings = (plant['readings'] as List?) ?? [];
           return readings.any((r) {
+            final map = Map<String, dynamic>.from(r as Map);
+            final weekNumber = map['weekNumber'] as int?;
+            final year = map['year'] as int?;
+            if (weekNumber != null && year != null) {
+              return weekNumber == _selectedWeek && year == _selectedYear;
+            }
             final recordedAt = DateTime.tryParse(
-              r['recordedAt'] as String? ?? '',
+              map['recordedAt'] as String? ?? '',
             );
             if (recordedAt == null) return false;
             return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
@@ -239,8 +257,14 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
         filtered = filtered.map((plant) {
           final readings = (plant['readings'] as List?) ?? [];
           final weekReadings = readings.where((r) {
+            final map = Map<String, dynamic>.from(r as Map);
+            final weekNumber = map['weekNumber'] as int?;
+            final year = map['year'] as int?;
+            if (weekNumber != null && year != null) {
+              return weekNumber == _selectedWeek && year == _selectedYear;
+            }
             final recordedAt = DateTime.tryParse(
-              r['recordedAt'] as String? ?? '',
+              map['recordedAt'] as String? ?? '',
             );
             if (recordedAt == null) return false;
             return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
@@ -258,7 +282,8 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
     }
   }
 
-  Future<void> _deletePlant(String plantId) async {
+  Future<void> _deletePlant(String? plantId) async {
+    if (plantId == null) return;
     // Grab qrCode and gridName before removing from _plants
     final plant = _plants.firstWhere(
       (p) => p['id'] == plantId,
@@ -732,10 +757,12 @@ class _PlantCardState extends State<_PlantCard> {
                                 );
                                 if (recordedAt == null)
                                   return const SizedBox.shrink();
-                                final week = WeekUtils.isoWeekNumber(
-                                  recordedAt,
-                                );
-                                final year = recordedAt.year;
+                                final week =
+                                    (reading['weekNumber'] as int?) ??
+                                    WeekUtils.isoWeekNumber(recordedAt);
+                                final year =
+                                    (reading['year'] as int?) ??
+                                    recordedAt.year;
                                 final isCurrent =
                                     week == WeekUtils.currentWeek &&
                                     year == WeekUtils.currentYear;

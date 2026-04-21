@@ -22,6 +22,13 @@ class PinColorUtils {
     if (readings == null || readings.isEmpty) return false;
     return readings.any((r) {
       final map = Map<String, dynamic>.from(r as Map);
+      final weekNumber = map['weekNumber'] as int?;
+      final year = map['year'] as int?;
+      if (weekNumber != null && year != null) {
+        return weekNumber == WeekUtils.currentWeek &&
+            year == WeekUtils.currentYear;
+      }
+      // Fallback: derive from recordedAt
       final recordedAt = DateTime.tryParse(map['recordedAt'] as String? ?? '');
       if (recordedAt == null) return false;
       return WeekUtils.isoWeekNumber(recordedAt) == WeekUtils.currentWeek &&

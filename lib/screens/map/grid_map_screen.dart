@@ -68,6 +68,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
   StreamSubscription<CompassEvent>? _compassStream;
 
   bool _cameraFollowing = true;
+  Timer? _pinRefreshTimer;
 
   List<Map<String, dynamic>> _plants = [];
   PointAnnotationManager? _plantAnnotationManager;
@@ -92,12 +93,22 @@ class _GridMapScreenState extends State<GridMapScreen> {
     }
     // Redraw pins whenever a sync completes
     syncCompleteNotifier.addListener(_onSyncComplete);
+
+    // Auto-refresh pins every 60 seconds to reflect DB changes
+    _pinRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
+      if (!mounted || _mapboxMap == null) return;
+      _annotationPlantMap.clear();
+      _plantAnnotationObjects.clear();
+      await _plantAnnotationManager?.deleteAll();
+      await _loadAndPinPlants(_mapboxMap!, withReadings: true);
+    });
   }
 
   @override
   void dispose() {
     _positionStream?.cancel();
     _compassStream?.cancel();
+    _pinRefreshTimer?.cancel();
     syncCompleteNotifier.removeListener(_onSyncComplete);
     super.dispose();
   }
@@ -1282,6 +1293,13 @@ class _GridMapScreenState extends State<GridMapScreen> {
                               final List readings = readingsRes.data;
                               hasReadings = readings.any((r) {
                                 final map = Map<String, dynamic>.from(r as Map);
+                                final weekNumber = map['weekNumber'] as int?;
+                                final year = map['year'] as int?;
+                                if (weekNumber != null && year != null) {
+                                  return weekNumber == currentWeek &&
+                                      year == currentYear;
+                                }
+                                // Fallback: derive from recordedAt
                                 final recordedAt = DateTime.tryParse(
                                   map['recordedAt'] as String? ?? '',
                                 );
@@ -1334,6 +1352,13 @@ class _GridMapScreenState extends State<GridMapScreen> {
                             r,
                           ) {
                             final map = Map<String, dynamic>.from(r as Map);
+                            final weekNumber = map['weekNumber'] as int?;
+                            final year = map['year'] as int?;
+                            if (weekNumber != null && year != null) {
+                              return weekNumber == currentWeek &&
+                                  year == currentYear;
+                            }
+                            // Fallback: derive from recordedAt
                             final recordedAt = DateTime.tryParse(
                               map['recordedAt'] as String? ?? '',
                             );
