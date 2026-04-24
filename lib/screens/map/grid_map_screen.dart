@@ -1009,12 +1009,15 @@ class _GridMapScreenState extends State<GridMapScreen> {
 
           if (_permissionChecked) ...[
             Positioned(
-              bottom: 420,
+              top: 16,
               right: 16,
               child: FloatingActionButton.small(
                 heroTag: 'grid_refresh',
-                backgroundColor: AppColors.surface,
+                backgroundColor: _isOnline
+                    ? AppColors.surface
+                    : AppColors.surface.withOpacity(0.4),
                 onPressed: () async {
+                  if (!_isOnline) return;
                   if (!mounted || _mapboxMap == null) return;
                   await _checkConnectivity();
                   _annotationPlantMap.clear();
@@ -1022,7 +1025,12 @@ class _GridMapScreenState extends State<GridMapScreen> {
                   await _plantAnnotationManager?.deleteAll();
                   await _loadAndPinPlants(_mapboxMap!, withReadings: true);
                 },
-                child: const Icon(Icons.refresh, color: AppColors.primary),
+                child: Icon(
+                  Icons.refresh,
+                  color: _isOnline
+                      ? AppColors.primary
+                      : AppColors.primary.withOpacity(0.3),
+                ),
               ),
             ),
             Positioned(
@@ -1061,7 +1069,9 @@ class _GridMapScreenState extends State<GridMapScreen> {
                 backgroundColor: _isOnline
                     ? AppColors.surface
                     : AppColors.surface.withOpacity(0.4),
-                onPressed: _isOnline ? _manualSync : null,
+                onPressed: () {
+                  if (_isOnline) _manualSync();
+                },
                 child: Icon(
                   Icons.cloud_upload,
                   color: _isOnline
