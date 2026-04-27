@@ -421,6 +421,91 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
     return '${months[dt.month - 1]} ${dt.day}, ${dt.year}  $hour:$minute $ampm';
   }
 
+  Widget _buildProgressSummary() {
+    final scanned = _plants.where((p) {
+      final readings = (p['readings'] as List?) ?? [];
+      return readings.isNotEmpty;
+    }).length;
+    final noReading = _plants.where((p) {
+      final readings = (p['readings'] as List?) ?? [];
+      return readings.isEmpty;
+    }).length;
+    final total = _plants.length;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.primary.withOpacity(0.15)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _summaryTile(
+              icon: Icons.check_circle_outline,
+              label: 'Scanned',
+              count: scanned,
+              total: total,
+              color: AppColors.pinGreen,
+            ),
+          ),
+          Container(
+            width: 1,
+            height: 36,
+            color: AppColors.primary.withOpacity(0.1),
+            margin: const EdgeInsets.symmetric(horizontal: 12),
+          ),
+          Expanded(
+            child: _summaryTile(
+              icon: Icons.radio_button_unchecked,
+              label: 'No Reading',
+              count: noReading,
+              total: total,
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _summaryTile({
+    required IconData icon,
+    required String label,
+    required int count,
+    required int total,
+    required Color color,
+  }) {
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$count / $total',
+              style: TextStyle(
+                color: color,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(
+              label,
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -505,22 +590,30 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
                 style: TextStyle(color: AppColors.textSecondary),
               ),
             )
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: _plants.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final plant = _plants[index];
-                final readings = (plant['readings'] as List?) ?? [];
-                return _PlantCard(
-                  plant: plant,
-                  readings: readings
-                      .map((r) => Map<String, dynamic>.from(r))
-                      .toList(),
-                  formatDate: _formatDate,
-                  onDelete: () => _deletePlant(plant['id']),
-                );
-              },
+          : Column(
+              children: [
+                _buildProgressSummary(),
+                const SizedBox(height: 4),
+                Expanded(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _plants.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      final plant = _plants[index];
+                      final readings = (plant['readings'] as List?) ?? [];
+                      return _PlantCard(
+                        plant: plant,
+                        readings: readings
+                            .map((r) => Map<String, dynamic>.from(r))
+                            .toList(),
+                        formatDate: _formatDate,
+                        onDelete: () => _deletePlant(plant['id']),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
     );
   }

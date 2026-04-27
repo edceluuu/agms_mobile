@@ -970,31 +970,7 @@ class _GridMapScreenState extends State<GridMapScreen> {
             ),
           ],
         ),
-        actions: [
-          Container(
-            margin: const EdgeInsets.only(right: 16),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: AppColors.pinGreen.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.pinGreen.withOpacity(0.4)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.eco, color: AppColors.pinGreen, size: 14),
-                const SizedBox(width: 4),
-                Text(
-                  '${widget.plantCount} plants',
-                  style: const TextStyle(
-                    color: AppColors.pinGreen,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+        actions: const [],
       ),
       body: Stack(
         children: [
@@ -1124,12 +1100,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
                         Icons.location_on,
                         widget.areaName,
                         AppColors.pinYellow,
-                      ),
-                      const SizedBox(width: 10),
-                      _infoChip(
-                        Icons.eco,
-                        '${widget.plantCount} plants',
-                        AppColors.pinGreen,
                       ),
                     ],
                   ),
