@@ -101,32 +101,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           const SizedBox(height: 4),
-          _roleBadge(user?.role ?? ''),
         ],
-      ),
-    );
-  }
-
-  Widget _roleBadge(String role) {
-    final colors = {
-      'ADMIN': AppColors.pinBlue,
-      'SUPERVISOR': AppColors.pinYellow,
-      'FIELD_USER': AppColors.pinGreen,
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: (colors[role] ?? AppColors.pinGray).withOpacity(0.2),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors[role] ?? AppColors.pinGray),
-      ),
-      child: Text(
-        role.replaceAll('_', ' '),
-        style: TextStyle(
-          color: colors[role] ?? AppColors.pinGray,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
       ),
     );
   }
@@ -135,17 +110,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final role = user?.role ?? '';
 
     final items = {
-      'ADMIN': [
-        _statCard('Total Plants', '248', Icons.forest, AppColors.pinGreen),
-        _statCard('Active Users', '12', Icons.people, AppColors.pinBlue),
-        _statCard('Flagged Readings', '3', Icons.flag, AppColors.pinRed),
-        _statCard(
-          'Weekly Compliance',
-          '87%',
-          Icons.check_circle,
-          AppColors.primary,
-        ),
-      ],
       'SUPERVISOR': [
         _statCard('Grids Assigned', '4', Icons.grid_on, AppColors.pinBlue),
         _statCard(
@@ -295,32 +259,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
 
-            // Plant count badge
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppColors.pinGreen.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.pinGreen.withOpacity(0.4)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.eco, color: AppColors.pinGreen, size: 12),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${grid['plantCount']}',
-                    style: const TextStyle(
-                      color: AppColors.pinGreen,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
             // Arrow indicator
-            const SizedBox(width: 8),
             const Icon(
               Icons.chevron_right,
               color: AppColors.textSecondary,

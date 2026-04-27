@@ -950,25 +950,13 @@ class _GridMapScreenState extends State<GridMapScreen> {
           icon: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              widget.gridName,
-              style: const TextStyle(
-                color: AppColors.textPrimary,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            Text(
-              widget.areaName,
-              style: const TextStyle(
-                color: AppColors.textSecondary,
-                fontSize: 12,
-              ),
-            ),
-          ],
+        title: const Text(
+          'AGMS Maps',
+          style: TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         actions: const [],
       ),
@@ -1074,6 +1062,22 @@ class _GridMapScreenState extends State<GridMapScreen> {
           ],
 
           Positioned(
+            bottom: 105,
+            left: 16,
+            child: Row(
+              children: [
+                _infoChip(Icons.grid_on, widget.gridName, AppColors.pinBlue),
+                const SizedBox(width: 8),
+                _infoChip(
+                  Icons.location_on,
+                  widget.areaName,
+                  AppColors.pinYellow,
+                ),
+              ],
+            ),
+          ),
+
+          Positioned(
             bottom: 0,
             left: 0,
             right: 0,
@@ -1088,22 +1092,6 @@ class _GridMapScreenState extends State<GridMapScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Row(
-                    children: [
-                      _infoChip(
-                        Icons.grid_on,
-                        widget.gridName,
-                        AppColors.pinBlue,
-                      ),
-                      const SizedBox(width: 10),
-                      _infoChip(
-                        Icons.location_on,
-                        widget.areaName,
-                        AppColors.pinYellow,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
