@@ -81,26 +81,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _greetingCard(UserModel? user) {
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12
+        ? 'Good morning'
+        : hour < 17
+        ? 'Good afternoon'
+        : 'Good evening';
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Text(
-            'Welcome, ${user?.name ?? 'User'}',
-            style: const TextStyle(
-              color: AppColors.textPrimary,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
+          Container(
+            width: 4,
+            height: 48,
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(4),
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(width: 14),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$greeting, ${user?.name ?? 'User'} 👋',
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -109,7 +134,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _roleBasedContent(UserModel? user) {
     final role = user?.role ?? '';
 
-    final items = {
+    final items = <String, List<Widget>>{
       'SUPERVISOR': [
         _statCard('Grids Assigned', '4', Icons.grid_on, AppColors.pinBlue),
         _statCard(
@@ -121,12 +146,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _statCard('Pending Scans', '32', Icons.pending, AppColors.pinYellow),
         _statCard('Flagged', '2', Icons.flag, AppColors.pinRed),
       ],
-      'FIELD_USER': [
-        _statCard('My Plants Today', '24', Icons.eco, AppColors.pinGreen),
-        _statCard('Scanned', '18', Icons.check, AppColors.primary),
-        _statCard('Pending', '6', Icons.schedule, AppColors.pinYellow),
-        _statCard('Flagged', '1', Icons.warning, AppColors.pinRed),
-      ],
+      'FIELD_USER': [],
     };
 
     final cards = items[role] ?? items['FIELD_USER']!;
@@ -200,7 +220,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(22),
         decoration: BoxDecoration(
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(10),
@@ -210,8 +230,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           children: [
             // Grid icon
             Container(
-              width: 40,
-              height: 40,
+              width: 52,
+              height: 52,
               decoration: BoxDecoration(
                 color: AppColors.pinBlue.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(8),
@@ -219,7 +239,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: const Icon(
                 Icons.grid_on,
                 color: AppColors.pinBlue,
-                size: 20,
+                size: 28,
               ),
             ),
             const SizedBox(width: 12),
@@ -233,7 +253,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     grid['name'] as String,
                     style: const TextStyle(
                       color: AppColors.textPrimary,
-                      fontSize: 14,
+                      fontSize: 16,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -243,14 +263,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       const Icon(
                         Icons.location_on,
                         color: AppColors.textSecondary,
-                        size: 12,
+                        size: 14,
                       ),
                       const SizedBox(width: 3),
                       Text(
                         grid['area'] as String,
                         style: const TextStyle(
                           color: AppColors.textSecondary,
-                          fontSize: 12,
+                          fontSize: 14,
                         ),
                       ),
                     ],
