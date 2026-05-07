@@ -13,6 +13,7 @@ class PlantHistoryScreen extends StatefulWidget {
 
 class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
   List<Map<String, dynamic>> _plants = [];
+  List<Map<String, dynamic>> _allPlants = []; // unfiltered, for progress totals
   bool _loading = true;
   String? _error;
 
@@ -181,6 +182,9 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
       // Also include plants that only exist in pending_plants (never synced)
       plants = _mergePendingPlants(plants);
 
+      // Save unfiltered list for progress summary totals
+      final allPlants = List<Map<String, dynamic>>.from(plants);
+
       // Apply week filter locally so pending readings are included in the filter
       if (_selectedWeek != null && _selectedYear != null) {
         plants = plants.where((plant) {
@@ -222,6 +226,7 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
       }
 
       setState(() {
+        _allPlants = allPlants;
         _plants = plants;
         _loading = false;
       });
@@ -231,6 +236,9 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
       // Merge pending readings and pending plants so offline additions appear
       cached = _mergePendingReadings(cached);
       cached = _mergePendingPlants(cached);
+
+      // Save unfiltered list for progress summary totals
+      final allPlants = List<Map<String, dynamic>>.from(cached);
 
       // Apply week filter locally when offline
       List<Map<String, dynamic>> filtered = cached;
@@ -275,6 +283,7 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
       }
 
       setState(() {
+        _allPlants = allPlants;
         _plants = filtered;
         _loading = false;
         _error = cached.isEmpty ? 'Failed to load history.' : null;
@@ -422,15 +431,12 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
   }
 
   Widget _buildProgressSummary() {
+    final total = _allPlants.length;
     final scanned = _plants.where((p) {
       final readings = (p['readings'] as List?) ?? [];
       return readings.isNotEmpty;
     }).length;
-    final noReading = _plants.where((p) {
-      final readings = (p['readings'] as List?) ?? [];
-      return readings.isEmpty;
-    }).length;
-    final total = _plants.length;
+    final noReading = total - scanned;
     final progress = total == 0 ? 0.0 : scanned / total;
 
     return Container(
