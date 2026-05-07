@@ -5,8 +5,10 @@ import '../services/auth_service.dart';
 import '../utils/constants.dart';
 import '../widgets/offline_banner.dart';
 import '../services/sync_service.dart';
+import '../utils/week_utils.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
-// Static grid data
+// Static grid data — scannedCount is computed dynamically from plant_pins cache
 const _staticGrids = [
   {'name': 'Grid A', 'area': 'Area 1', 'plantCount': 12},
 ];
@@ -78,6 +80,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
     );
+  }
+
+  int _getScannedCount(String gridName) {
+    final box = Hive.box('plant_pins');
+    final raw = box.get('pins_$gridName');
+    if (raw == null) return 0;
+    final plants = (raw as List)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    final currentWeek = WeekUtils.currentWeek;
+    final currentYear = WeekUtils.currentYear;
+    return plants.where((plant) {
+      final readings = (plant['readings'] as List?) ?? [];
+      return readings.any((r) {
+        final map = Map<String, dynamic>.from(r as Map);
+        final weekNumber = map['weekNumber'] as int?;
+        final year = map['year'] as int?;
+        if (weekNumber != null && year != null) {
+          return weekNumber == currentWeek && year == currentYear;
+        }
+        final recordedAt = DateTime.tryParse(
+          map['recordedAt'] as String? ?? '',
+        );
+        if (recordedAt == null) return false;
+        return WeekUtils.isoWeekNumber(recordedAt) == currentWeek &&
+            recordedAt.year == currentYear;
+      });
+    }).length;
   }
 
   Widget _greetingCard(UserModel? user) {
@@ -210,14 +240,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _gridItem(Map<String, dynamic> grid, BuildContext context) {
     return GestureDetector(
-      onTap: () => context.push(
-        '/grid-map',
-        extra: {
-          'gridName': grid['name'] as String,
-          'areaName': grid['area'] as String,
-          'plantCount': grid['plantCount'] as int,
-        },
-      ),
+      onTap: () async {
+        await context.push(
+          '/grid-map',
+          extra: {
+            'gridName': grid['name'] as String,
+            'areaName': grid['area'] as String,
+            'plantCount': grid['plantCount'] as int,
+          },
+        );
+        if (mounted) setState(() {});
+      },
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(22),
@@ -277,41 +310,74 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   const SizedBox(height: 6),
 
-                  // ── NEW: Plant count + Complete Reading badge ──
-                  Row(
-                    children: [
-                      Text(
-                        '${grid['plantCount']}/${grid['plantCount']}',
-                        style: const TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Complete Reading',
-                        style: const TextStyle(
-                          color: AppColors.pinGreen,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Container(
-                        width: 18,
-                        height: 18,
-                        decoration: const BoxDecoration(
-                          color: AppColors.pinGreen,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.check,
-                          color: Colors.white,
-                          size: 12,
-                        ),
-                      ),
-                    ],
+                  // ── Plant count + dynamic reading badge ──
+                  Builder(
+                    builder: (context) {
+                      final total = grid['plantCount'] as int;
+                      final scanned = _getScannedCount(grid['name'] as String);
+                      final missing = total - scanned;
+                      final isComplete = missing == 0;
+
+                      return Row(
+                        children: [
+                          Text(
+                            '$scanned/$total',
+                            style: const TextStyle(
+                              color: AppColors.textSecondary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          if (isComplete) ...[
+                            const Text(
+                              'Complete Reading',
+                              style: TextStyle(
+                                color: AppColors.pinGreen,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Container(
+                              width: 18,
+                              height: 18,
+                              decoration: const BoxDecoration(
+                                color: AppColors.pinGreen,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.check,
+                                color: Colors.white,
+                                size: 12,
+                              ),
+                            ),
+                          ] else ...[
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.pinRed.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: AppColors.pinRed.withOpacity(0.4),
+                                ),
+                              ),
+                              child: Text(
+                                '$missing sample${missing > 1 ? 's' : ''} no reading',
+                                style: const TextStyle(
+                                  color: AppColors.pinRed,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
                   ),
                 ],
               ),
