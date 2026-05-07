@@ -8,7 +8,7 @@ import '../services/sync_service.dart';
 
 // Static grid data
 const _staticGrids = [
-  {'name': 'Grid A', 'area': 'Area 1', 'plantCount': 32},
+  {'name': 'Grid A', 'area': 'Area 1', 'plantCount': 12},
 ];
 
 class DashboardScreen extends StatefulWidget {
@@ -271,6 +271,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         style: const TextStyle(
                           color: AppColors.textSecondary,
                           fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+
+                  // ── NEW: Plant count + Complete Reading badge ──
+                  Row(
+                    children: [
+                      Text(
+                        '${grid['plantCount']}/${grid['plantCount']}',
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Complete Reading',
+                        style: const TextStyle(
+                          color: AppColors.pinGreen,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Container(
+                        width: 18,
+                        height: 18,
+                        decoration: const BoxDecoration(
+                          color: AppColors.pinGreen,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.check,
+                          color: Colors.white,
+                          size: 12,
                         ),
                       ),
                     ],
