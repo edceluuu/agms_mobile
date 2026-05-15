@@ -58,7 +58,9 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
           IconButton(
             icon: Icon(
               _torchOn ? Icons.flashlight_on : Icons.flashlight_off,
-              color: _torchOn ? AppColors.pinYellow : AppColors.textSecondary,
+              color: _torchOn
+                  ? const Color(0xFFD69E2E)
+                  : AppColors.textSecondary,
             ),
             onPressed: () {
               _controller.toggleTorch();

@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import '../../utils/constants.dart';
 import '../../services/api_service.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 
 class DataEntryScreen extends StatefulWidget {
   final String qrCode;
@@ -116,11 +115,6 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
 
   String get _heightUnit => _heightInCm ? 'CM' : 'M';
 
-  Future<bool> _isOnline() async {
-    final result = await Connectivity().checkConnectivity();
-    return result != ConnectivityResult.none;
-  }
-
   // ---------------------------------------------------------------------------
   // Offline save
   // ---------------------------------------------------------------------------
@@ -162,7 +156,7 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
                   Text(
                     'Reading saved locally',
                     style: TextStyle(
-                      color: Colors.white,
+                      color: Colors.black87,
                       fontWeight: FontWeight.bold,
                       fontSize: 14,
                     ),
@@ -192,44 +186,25 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isSubmitting = true);
-
-    final online = await _isOnline();
-
-    // If truly offline, go straight to local save regardless of widget.isOffline
-    if (!online) {
-      setState(() => _isSubmitting = false);
-      await _saveOffline();
-      return;
-    }
-
-    // We are online — but plantId may still be null if it's a brand new plant
-    // that failed to pass its ID through. Show error instead of silently saving offline.
     if (_plantId == null) {
-      setState(() => _isSubmitting = false);
-      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
           backgroundColor: Colors.white,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(10),
-            side: BorderSide(color: AppColors.pinRed.withOpacity(0.4)),
+            side: BorderSide(color: Colors.orange.withOpacity(0.4)),
           ),
           margin: const EdgeInsets.all(16),
-          content: Row(
+          content: const Row(
             children: [
-              Icon(
-                Icons.warning_amber_rounded,
-                color: AppColors.pinRed,
-                size: 20,
-              ),
-              const SizedBox(width: 10),
+              Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 20),
+              SizedBox(width: 10),
               Expanded(
                 child: Text(
                   'Plant not found. Please scan the QR code again.',
                   style: TextStyle(
-                    color: AppColors.pinRed,
+                    color: Colors.orange,
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
                   ),

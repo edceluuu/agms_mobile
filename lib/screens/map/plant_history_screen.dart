@@ -343,7 +343,7 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             behavior: SnackBarBehavior.floating,
-            backgroundColor: AppColors.pinRed,
+            backgroundColor: Colors.red,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
             ),

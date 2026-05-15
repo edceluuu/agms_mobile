@@ -12,6 +12,7 @@ class PinColorUtils {
   }) {
     if (hasPendingReading) return blue;
 
+    // 🟢 Green — reading confirmed on server this week
     final readings = plant['readings'] as List?;
     if (_hasReadingThisWeek(readings)) return green;
 

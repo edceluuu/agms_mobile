@@ -21,9 +21,7 @@ class AppColors {
     0xFF757575,
   ); // slightly darker for readability
 
-  static const Color pinRed = Color(0xFFE53E3E);
-  static const Color pinGreen = Color(0xFF38A169);
-  static const Color pinBlue = Color(0xFF3182CE);
-  static const Color pinYellow = Color(0xFFD69E2E);
-  static const Color pinGray = Color(0xFFA0AEC0);
+  static const Color pinGray = Color(0xFFA0AEC0); // no reading yet
+  static const Color pinBlue = Color(0xFF3182CE); // reading saved locally
+  static const Color pinGreen = Color(0xFF38A169); // uploaded to server
 }

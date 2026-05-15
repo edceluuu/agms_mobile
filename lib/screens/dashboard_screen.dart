@@ -24,7 +24,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    SyncService.syncAll(); // fire-and-forget
   }
 
   @override
@@ -173,8 +172,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Icons.qr_code_scanner,
           AppColors.pinGreen,
         ),
-        _statCard('Pending Scans', '32', Icons.pending, AppColors.pinYellow),
-        _statCard('Flagged', '2', Icons.flag, AppColors.pinRed),
+        _statCard(
+          'Pending Scans',
+          '32',
+          Icons.pending,
+          const Color(0xFFD69E2E),
+        ),
+        _statCard('Flagged', '2', Icons.flag, Colors.red),
       ],
       'FIELD_USER': [],
     };

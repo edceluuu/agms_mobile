@@ -16,6 +16,8 @@ class HiveStorage {
     await Hive.openBox('pending_plants');
     await Hive.openBox('pending_deletions');
     await Hive.openBox('pending_deactivations');
+    await Hive.box('plant_history').clear();
+    await Hive.box('plant_pins').clear();
   }
 
   // User
