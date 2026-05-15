@@ -13,13 +13,13 @@ class PlantHistoryScreen extends StatefulWidget {
 
 class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
   List<Map<String, dynamic>> _plants = [];
+  List<Map<String, dynamic>> _allPlants = []; // unfiltered, for progress totals
   bool _loading = true;
   String? _error;
 
-  // Week filter state
-  // null means "All Weeks"
-  int? _selectedWeek;
-  int? _selectedYear;
+  // Week filter state — defaults to current week
+  int? _selectedWeek = WeekUtils.currentWeek;
+  int? _selectedYear = WeekUtils.currentYear;
   List<Map<String, dynamic>> _availableWeeks = []; // [{week, year, label}]
 
   @override
@@ -69,23 +69,176 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
         .toList();
   }
 
+  // Merges pending_readings from Hive into the plant list
+  List<Map<String, dynamic>> _mergePendingReadings(
+    List<Map<String, dynamic>> plants,
+  ) {
+    final pendingBox = Hive.box('pending_readings');
+    final List pending = List.from(
+      pendingBox.get('readings', defaultValue: <dynamic>[]) as List,
+    );
+    if (pending.isEmpty) return plants;
+
+    return plants.map((plant) {
+      final qrCode = plant['qrCode'] as String?;
+      final existingReadings = List<Map<String, dynamic>>.from(
+        ((plant['readings'] as List?) ?? []).map(
+          (r) => Map<String, dynamic>.from(r as Map),
+        ),
+      );
+
+      // Find any pending readings that belong to this plant
+      final pendingReadings = pending
+          .where((r) => r['qrCode'] == qrCode)
+          .map(
+            (r) => {
+              'height': r['height'],
+              'girth': r['girth'],
+              'recordedAt': r['recordedAt'],
+              'weekNumber': WeekUtils.isoWeekNumber(
+                DateTime.parse(r['recordedAt'] as String),
+              ),
+              'year': DateTime.parse(r['recordedAt'] as String).year,
+              'isFlagged': false,
+              'flagReason': null,
+              'user': {'name': 'Pending upload'},
+            },
+          )
+          .toList();
+
+      if (pendingReadings.isEmpty) return plant;
+
+      return {
+        ...plant,
+        'readings': [...pendingReadings, ...existingReadings],
+      };
+    }).toList();
+  }
+
+  // Adds plants from pending_plants that haven't been synced yet
+  List<Map<String, dynamic>> _mergePendingPlants(
+    List<Map<String, dynamic>> plants,
+  ) {
+    final pendingBox = Hive.box('pending_plants');
+    final List pending = List.from(
+      pendingBox.get('plants', defaultValue: <dynamic>[]) as List,
+    );
+    if (pending.isEmpty) return plants;
+
+    final existingQrCodes = plants.map((p) => p['qrCode']).toSet();
+    final pendingReadingsBox = Hive.box('pending_readings');
+    final List pendingReadings = List.from(
+      pendingReadingsBox.get('readings', defaultValue: <dynamic>[]) as List,
+    );
+
+    for (final p in pending) {
+      final qrCode = p['qrCode'] as String?;
+      if (qrCode == null || existingQrCodes.contains(qrCode)) continue;
+
+      // Attach any pending readings for this plant
+      final readings = pendingReadings
+          .where((r) => r['qrCode'] == qrCode)
+          .map(
+            (r) => {
+              'height': r['height'],
+              'girth': r['girth'],
+              'recordedAt': r['recordedAt'],
+              'weekNumber': WeekUtils.isoWeekNumber(
+                DateTime.parse(r['recordedAt'] as String),
+              ),
+              'year': DateTime.parse(r['recordedAt'] as String).year,
+              'isFlagged': false,
+              'flagReason': null,
+              'user': {'name': 'Pending upload'},
+            },
+          )
+          .toList();
+
+      plants.add({
+        'id': null,
+        'qrCode': qrCode,
+        'gridName': p['gridName'],
+        'areaName': p['areaName'],
+        'latitude': p['latitude'],
+        'longitude': p['longitude'],
+        'readings': readings,
+      });
+    }
+
+    return plants;
+  }
+
   Future<void> _fetchPlants() async {
     try {
-      // Build query string if a specific week is selected
-      String endpoint = '/plants';
-      if (_selectedWeek != null && _selectedYear != null) {
-        endpoint = '/plants?week=$_selectedWeek&year=$_selectedYear';
-      }
-      final response = await ApiService.get(endpoint);
+      // Always fetch ALL plants with ALL readings first
+      final response = await ApiService.get('/plants');
       final List data = response.data;
-      final plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
+      var plants = data.map((e) => Map<String, dynamic>.from(e)).toList();
       _saveToCache(plants);
+
+      // Merge pending local readings so they appear before upload
+      plants = _mergePendingReadings(plants);
+
+      // Also include plants that only exist in pending_plants (never synced)
+      plants = _mergePendingPlants(plants);
+
+      // Save unfiltered list for progress summary totals
+      final allPlants = List<Map<String, dynamic>>.from(plants);
+
+      // Apply week filter locally so pending readings are included in the filter
+      if (_selectedWeek != null && _selectedYear != null) {
+        plants = plants.where((plant) {
+          final readings = (plant['readings'] as List?) ?? [];
+          return readings.any((r) {
+            final map = Map<String, dynamic>.from(r as Map);
+            final weekNumber = map['weekNumber'] as int?;
+            final year = map['year'] as int?;
+            if (weekNumber != null && year != null) {
+              return weekNumber == _selectedWeek && year == _selectedYear;
+            }
+            final recordedAt = DateTime.tryParse(
+              map['recordedAt'] as String? ?? '',
+            );
+            if (recordedAt == null) return false;
+            return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
+                recordedAt.year == _selectedYear;
+          });
+        }).toList();
+
+        plants = plants.map((plant) {
+          final readings = (plant['readings'] as List?) ?? [];
+          final weekReadings = readings.where((r) {
+            final map = Map<String, dynamic>.from(r as Map);
+            final weekNumber = map['weekNumber'] as int?;
+            final year = map['year'] as int?;
+            if (weekNumber != null && year != null) {
+              return weekNumber == _selectedWeek && year == _selectedYear;
+            }
+            final recordedAt = DateTime.tryParse(
+              map['recordedAt'] as String? ?? '',
+            );
+            if (recordedAt == null) return false;
+            return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
+                recordedAt.year == _selectedYear;
+          }).toList();
+          return {...plant, 'readings': weekReadings};
+        }).toList();
+      }
+
       setState(() {
+        _allPlants = allPlants;
         _plants = plants;
         _loading = false;
       });
     } catch (e) {
-      final cached = _loadFromCache();
+      var cached = _loadFromCache();
+
+      // Merge pending readings and pending plants so offline additions appear
+      cached = _mergePendingReadings(cached);
+      cached = _mergePendingPlants(cached);
+
+      // Save unfiltered list for progress summary totals
+      final allPlants = List<Map<String, dynamic>>.from(cached);
 
       // Apply week filter locally when offline
       List<Map<String, dynamic>> filtered = cached;
@@ -93,8 +246,14 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
         filtered = cached.where((plant) {
           final readings = (plant['readings'] as List?) ?? [];
           return readings.any((r) {
+            final map = Map<String, dynamic>.from(r as Map);
+            final weekNumber = map['weekNumber'] as int?;
+            final year = map['year'] as int?;
+            if (weekNumber != null && year != null) {
+              return weekNumber == _selectedWeek && year == _selectedYear;
+            }
             final recordedAt = DateTime.tryParse(
-              r['recordedAt'] as String? ?? '',
+              map['recordedAt'] as String? ?? '',
             );
             if (recordedAt == null) return false;
             return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
@@ -106,8 +265,14 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
         filtered = filtered.map((plant) {
           final readings = (plant['readings'] as List?) ?? [];
           final weekReadings = readings.where((r) {
+            final map = Map<String, dynamic>.from(r as Map);
+            final weekNumber = map['weekNumber'] as int?;
+            final year = map['year'] as int?;
+            if (weekNumber != null && year != null) {
+              return weekNumber == _selectedWeek && year == _selectedYear;
+            }
             final recordedAt = DateTime.tryParse(
-              r['recordedAt'] as String? ?? '',
+              map['recordedAt'] as String? ?? '',
             );
             if (recordedAt == null) return false;
             return WeekUtils.isoWeekNumber(recordedAt) == _selectedWeek &&
@@ -118,6 +283,7 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
       }
 
       setState(() {
+        _allPlants = allPlants;
         _plants = filtered;
         _loading = false;
         _error = cached.isEmpty ? 'Failed to load history.' : null;
@@ -125,107 +291,8 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
     }
   }
 
-  Future<void> _deactivatePlant(String plantId) async {
-    // Get plant details before updating state
-    final plant = _plants.firstWhere(
-      (p) => p['id'] == plantId,
-      orElse: () => {},
-    );
-    final gridName = plant['gridName'] as String?;
-    final qrCode = plant['qrCode'] as String?;
-
-    // Optimistic UI update
-    setState(() {
-      final idx = _plants.indexWhere((p) => p['id'] == plantId);
-      if (idx != -1) _plants[idx]['isActive'] = false;
-    });
-    _saveToCache(_plants);
-
-    // Also update plant_pins cache so the map shows gray immediately
-    if (gridName != null && qrCode != null) {
-      final pinsBox = Hive.box('plant_pins');
-      final cacheKey = 'pins_$gridName';
-      final rawPins = pinsBox.get(cacheKey, defaultValue: <dynamic>[]) as List;
-      final updatedPins = rawPins.map((e) {
-        final pin = Map<String, dynamic>.from(e as Map);
-        if (pin['qrCode'] == qrCode) {
-          return {...pin, 'isActive': false};
-        }
-        return pin;
-      }).toList();
-      await pinsBox.put(cacheKey, updatedPins);
-    }
-
-    try {
-      await ApiService.patch('/plants/$plantId/deactivate', data: {});
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: Colors.orange,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            margin: const EdgeInsets.all(16),
-            content: const Row(
-              children: [
-                Icon(Icons.block, color: Colors.white, size: 20),
-                SizedBox(width: 10),
-                Text(
-                  'Plant deactivated.',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
-    } catch (_) {
-      final box = Hive.box('pending_deactivations');
-      final List pending = List.from(
-        box.get('plants', defaultValue: <dynamic>[]) as List,
-      );
-      if (!pending.contains(plantId)) {
-        pending.add(plantId);
-        await box.put('plants', pending);
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: Colors.orange,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            margin: const EdgeInsets.all(16),
-            content: const Row(
-              children: [
-                Icon(Icons.cloud_off, color: Colors.white, size: 20),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Deactivated offline — will sync when back online.',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            duration: const Duration(seconds: 3),
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _deletePlant(String plantId) async {
+  Future<void> _deletePlant(String? plantId) async {
+    if (plantId == null) return;
     // Grab qrCode and gridName before removing from _plants
     final plant = _plants.firstWhere(
       (p) => p['id'] == plantId,
@@ -363,6 +430,140 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
     return '${months[dt.month - 1]} ${dt.day}, ${dt.year}  $hour:$minute $ampm';
   }
 
+  Widget _buildProgressSummary() {
+    final total = _allPlants.length;
+    final scanned = _plants.where((p) {
+      final readings = (p['readings'] as List?) ?? [];
+      return readings.isNotEmpty;
+    }).length;
+    final noReading = total - scanned;
+    final progress = total == 0 ? 0.0 : scanned / total;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _summaryTile(
+                  icon: Icons.check_circle_outline,
+                  label: 'Scanned',
+                  count: scanned,
+                  total: total,
+                  color: AppColors.pinGreen,
+                ),
+              ),
+              Container(
+                width: 1,
+                height: 36,
+                color: AppColors.primary.withOpacity(0.08),
+                margin: const EdgeInsets.symmetric(horizontal: 16),
+              ),
+              Expanded(
+                child: _summaryTile(
+                  icon: Icons.radio_button_unchecked,
+                  label: 'No Reading',
+                  count: noReading,
+                  total: total,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 5,
+              backgroundColor: AppColors.primary.withOpacity(0.08),
+              valueColor: AlwaysStoppedAnimation<Color>(AppColors.pinGreen),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${(progress * 100).toStringAsFixed(0)}% scanned this week',
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _summaryTile({
+    required IconData icon,
+    required String label,
+    required int count,
+    required int total,
+    required Color color,
+  }) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(7),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, color: color, size: 16),
+        ),
+        const SizedBox(width: 10),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  '$count',
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  ' / $total',
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+            Text(
+              label,
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -401,20 +602,13 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
                     color: AppColors.primary,
                     size: 16,
                   ),
-                  value: _selectedWeek == null
-                      ? 'all'
-                      : '${_selectedWeek}_${_selectedYear}',
+                  value: '${_selectedWeek}_${_selectedYear}',
                   style: const TextStyle(
                     color: AppColors.primary,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
                   items: [
-                    // "All Weeks" option
-                    const DropdownMenuItem(
-                      value: 'all',
-                      child: Text('All Weeks'),
-                    ),
                     // One item per week
                     ..._availableWeeks.map((w) {
                       final key = '${w['week']}_${w['year']}';
@@ -425,20 +619,12 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
                     }),
                   ],
                   onChanged: (val) {
-                    if (val == 'all') {
-                      setState(() {
-                        _selectedWeek = null;
-                        _selectedYear = null;
-                        _loading = true;
-                      });
-                    } else {
-                      final parts = val!.split('_');
-                      setState(() {
-                        _selectedWeek = int.parse(parts[0]);
-                        _selectedYear = int.parse(parts[1]);
-                        _loading = true;
-                      });
-                    }
+                    final parts = val!.split('_');
+                    setState(() {
+                      _selectedWeek = int.parse(parts[0]);
+                      _selectedYear = int.parse(parts[1]);
+                      _loading = true;
+                    });
                     _fetchPlants();
                   },
                 ),
@@ -462,23 +648,30 @@ class _PlantHistoryScreenState extends State<PlantHistoryScreen> {
                 style: TextStyle(color: AppColors.textSecondary),
               ),
             )
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: _plants.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final plant = _plants[index];
-                final readings = (plant['readings'] as List?) ?? [];
-                return _PlantCard(
-                  plant: plant,
-                  readings: readings
-                      .map((r) => Map<String, dynamic>.from(r))
-                      .toList(),
-                  formatDate: _formatDate,
-                  onDelete: () => _deletePlant(plant['id']),
-                  onDeactivate: () => _deactivatePlant(plant['id']),
-                );
-              },
+          : Column(
+              children: [
+                _buildProgressSummary(),
+                const SizedBox(height: 4),
+                Expanded(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _plants.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      final plant = _plants[index];
+                      final readings = (plant['readings'] as List?) ?? [];
+                      return _PlantCard(
+                        plant: plant,
+                        readings: readings
+                            .map((r) => Map<String, dynamic>.from(r))
+                            .toList(),
+                        formatDate: _formatDate,
+                        onDelete: () => _deletePlant(plant['id']),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
     );
   }
@@ -489,14 +682,12 @@ class _PlantCard extends StatefulWidget {
   final List<Map<String, dynamic>> readings;
   final String Function(String) formatDate;
   final VoidCallback onDelete;
-  final VoidCallback onDeactivate;
 
   const _PlantCard({
     required this.plant,
     required this.readings,
     required this.formatDate,
     required this.onDelete,
-    required this.onDeactivate,
   });
 
   @override
@@ -514,8 +705,14 @@ class _PlantCardState extends State<_PlantCard> {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.primary.withOpacity(0.15)),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         children: [
@@ -548,11 +745,8 @@ class _PlantCardState extends State<_PlantCard> {
                         vertical: 3,
                       ),
                       decoration: BoxDecoration(
-                        color: AppColors.pinGreen.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: AppColors.pinGreen.withOpacity(0.3),
-                        ),
+                        color: AppColors.pinGreen.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
                         '${readings.length} reading${readings.length == 1 ? '' : 's'}',
@@ -561,39 +755,6 @@ class _PlantCardState extends State<_PlantCard> {
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () async {
-                        final confirm = await showDialog<bool>(
-                          context: context,
-                          builder: (ctx) => AlertDialog(
-                            title: const Text('Deactivate Plant'),
-                            content: const Text(
-                              'Mark this plant as decommissioned? It will appear gray on the map.',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, false),
-                                child: const Text('Cancel'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, true),
-                                child: const Text(
-                                  'Deactivate',
-                                  style: TextStyle(color: Colors.orange),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (confirm == true) widget.onDeactivate();
-                      },
-                      child: const Icon(
-                        Icons.block,
-                        color: Colors.orange,
-                        size: 20,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -718,10 +879,7 @@ class _PlantCardState extends State<_PlantCard> {
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: AppColors.background,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: AppColors.primary.withOpacity(0.08),
-                      ),
+                      borderRadius: BorderRadius.circular(10),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -750,10 +908,12 @@ class _PlantCardState extends State<_PlantCard> {
                                 );
                                 if (recordedAt == null)
                                   return const SizedBox.shrink();
-                                final week = WeekUtils.isoWeekNumber(
-                                  recordedAt,
-                                );
-                                final year = recordedAt.year;
+                                final week =
+                                    (reading['weekNumber'] as int?) ??
+                                    WeekUtils.isoWeekNumber(recordedAt);
+                                final year =
+                                    (reading['year'] as int?) ??
+                                    recordedAt.year;
                                 final isCurrent =
                                     week == WeekUtils.currentWeek &&
                                     year == WeekUtils.currentYear;
@@ -851,23 +1011,29 @@ class _PlantCardState extends State<_PlantCard> {
 
   Widget _miniStat(String label, String value, IconData icon, Color color) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withOpacity(0.2)),
+        color: color.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: [
-          Icon(icon, color: color, size: 14),
-          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Icon(icon, color: color, size: 13),
+          ),
+          const SizedBox(width: 8),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 label,
                 style: TextStyle(
-                  color: color,
+                  color: color.withOpacity(0.8),
                   fontSize: 10,
                   fontWeight: FontWeight.w500,
                 ),

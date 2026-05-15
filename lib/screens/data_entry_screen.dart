@@ -141,15 +141,12 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-          side: BorderSide(color: AppColors.pinBlue.withOpacity(0.4)),
-        ),
+        backgroundColor: AppColors.pinBlue,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         margin: const EdgeInsets.all(16),
         content: const Row(
           children: [
-            Icon(Icons.save_alt, color: AppColors.pinBlue, size: 20),
+            Icon(Icons.save, color: Colors.white, size: 20),
             SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -157,7 +154,7 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Saved locally',
+                    'Reading saved locally',
                     style: TextStyle(
                       color: Colors.black87,
                       fontWeight: FontWeight.bold,
@@ -165,8 +162,8 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
                     ),
                   ),
                   Text(
-                    'Tap Upload All on the map to push to server.',
-                    style: TextStyle(color: Colors.black54, fontSize: 12),
+                    'Tap Upload to sync to server.',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
                   ),
                 ],
               ),
@@ -221,7 +218,7 @@ class _DataEntryScreenState extends State<DataEntryScreen> {
       return;
     }
 
-    // Always save locally first — user must tap Upload All to push to server
+    // Always save locally first — pin will show blue until upload is clicked
     await _saveOffline();
   }
 
